@@ -17,6 +17,9 @@ __pycache__/
 config.local.py
 .env
 
+# Host-specific paths recorded by deploy.ps1
+.python_path
+
 # Editor
 .vscode/
 .idea/

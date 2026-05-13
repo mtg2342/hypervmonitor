@@ -82,9 +82,10 @@ C:\Users\User\Desktop\Projects\Hyper v monitor\
 ├── config.py                All tunable constants
 ├── requirements.txt         Python deps (flask)
 ├── start.bat                One-click launcher with admin check
-├── update.bat               Pull latest from GitHub and restart (host)
-├── first-time-setup.bat     Initial install helper for the host
+├── update.bat               Convenience shortcut that re-runs deploy.ps1
+├── deploy.ps1               All-in-one install/update/restart script
 ├── .gitignore               Excludes the SQLite DB so history survives updates
+├── .python_path             Records real python.exe path (gitignored, host-specific)
 ├── PROJECT_REFERENCE.md     This file
 ├── hyperv_monitor.db        SQLite database (created on first run — gitignored)
 ├── static/
@@ -257,7 +258,7 @@ The host pulls updates from GitHub. Code changes are made on a separate dev mach
 │                       │         │  hypervmonitor       │
 └──────────────────────┘         └──────────────────────┘
                                             │
-                                            │  pull (via update.bat)
+                                            │  pull (via deploy.ps1)
                                             ▼
                                   ┌──────────────────────┐
                                   │  Hyper-V Host         │
@@ -265,39 +266,31 @@ The host pulls updates from GitHub. Code changes are made on a separate dev mach
                                   └──────────────────────┘
 ```
 
-### First-time host setup (one-line installer)
+### One command for everything
 
-Open PowerShell (or Windows Terminal) and paste:
+The host uses a single unified script — `deploy.ps1` — that handles fresh installs, updates, and restarts. It's idempotent: re-running it from scratch is always safe.
+
+Open PowerShell on the host (any window, elevated or not) and paste:
 
 ```powershell
-iex (irm https://raw.githubusercontent.com/mtg2342/hypervmonitor/main/install.ps1)
+iex (irm https://raw.githubusercontent.com/mtg2342/hypervmonitor/main/deploy.ps1)
 ```
 
-The installer will:
-- Self-elevate to Administrator
-- Check for Git and Python — offer to install them via `winget` if missing
-- Ask where to install (default `C:\hypervmonitor`)
-- `git clone` the repo
-- `pip install` Flask
-- Offer to create a Task Scheduler entry that runs `start.bat` at login (auto-start)
-- Offer to launch the dashboard and open `http://127.0.0.1:5000` in the browser
+The script will:
+1. Self-elevate to Administrator (UAC prompt)
+2. Clean up any leftover state (stale `GH_TOKEN` env var, etc.)
+3. Install Git via winget if it's missing
+4. Install real Python via winget if it's missing — automatically detects and routes around the Microsoft Store "App Execution Alias" stub
+5. **If `C:\hypervmonitor` already exists**: stop the running app, `git pull`, restart it (this is the update path)
+   **Otherwise**: `git clone` into `C:\hypervmonitor` (this is the fresh-install path)
+6. `pip install --upgrade` Flask
+7. Write the real `python.exe` path to `.python_path` so `start.bat` can use it directly forever (immune to the App Execution Alias stub)
+8. Offer to register a Task Scheduler entry for auto-start at login (only the first time)
+9. Launch the dashboard and open it in the default browser
 
-### First-time host setup (manual)
+### Updating
 
-If you prefer not to run the installer:
-1. Install Python 3.10+ (python.org, "Add to PATH" checked) and Git for Windows (git-scm.com)
-2. Clone the repo: `git clone https://github.com/mtg2342/hypervmonitor.git C:\hypervmonitor`
-3. Right-click `start.bat` → **Run as administrator**
-
-### Updating the host
-
-1. Right-click `update.bat` → **Run as administrator**
-2. It will:
-   - Stop any running `python app.py` process
-   - `git fetch` and show the incoming commit messages
-   - `git pull --ff-only` (fails safely if there are local changes that would conflict)
-   - Re-install Python dependencies if `requirements.txt` changed
-   - Restart `start.bat`
+Just run the same one-liner again — or right-click `C:\hypervmonitor\update.bat` → Run as administrator. Both do exactly the same thing. The script detects an existing install and switches into update mode automatically.
 
 ### History is never lost
 
