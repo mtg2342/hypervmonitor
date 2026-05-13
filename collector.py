@@ -651,13 +651,10 @@ class MetricCollector:
                 "detail": "Set EnableLUA=1 in HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System and reboot.",
             })
 
-        bitlocker = data.get("BitLocker", "")
-        if bitlocker.startswith("Off"):
-            findings.append({
-                "severity": "medium",
-                "title": "BitLocker is not enabled on any volume",
-                "detail": "Encrypting the system drive protects data if the host disks are removed.",
-            })
+        # BitLocker status is collected for the Security tile but is not
+        # surfaced as a finding — Hyper-V hosts often legitimately run without
+        # BitLocker (locked physical access, full-disk encryption handled at
+        # a different layer, etc.). Status remains visible on the tile.
 
         admin_count = data.get("AdminCount", -1)
         if isinstance(admin_count, int) and admin_count > 3:

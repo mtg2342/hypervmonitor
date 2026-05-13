@@ -853,13 +853,13 @@ function renderSecurityStatus(d) {
         setSecValue('secDefender', 'Unknown', 'unknown', '');
     }
 
-    // BitLocker
+    // BitLocker — purely informational tile (never raises a finding)
     const bl = d.bitlocker_status || '';
     let blLevel = 'unknown';
-    if (bl.startsWith('On'))           blLevel = 'ok';
-    else if (bl.startsWith('Off'))     blLevel = 'warn';
-    else if (bl.startsWith('Mixed'))   blLevel = 'warn';
-    else if (bl === 'None')            blLevel = 'info';
+    if (bl.startsWith('On'))         blLevel = 'ok';
+    else if (bl.startsWith('Off'))   blLevel = 'info';   // informational, not a warning
+    else if (bl.startsWith('Mixed')) blLevel = 'info';   // informational, not a warning
+    else if (bl === 'None')          blLevel = 'info';
     setSecValue('secBitlocker', bl || '--', blLevel, '');
 
     // UAC
