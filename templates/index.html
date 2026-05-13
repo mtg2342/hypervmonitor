@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hyper-V Monitor</title>
+    <link rel="stylesheet" href="/static/css/dashboard.css">
+</head>
+<body>
+    <header>
+        <h1>Hyper-V Monitor</h1>
+        <div class="header-controls">
+            <div class="range-buttons" id="rangeButtons">
+                <button class="range-btn active" data-range="1h">1H</button>
+                <button class="range-btn" data-range="6h">6H</button>
+                <button class="range-btn" data-range="24h">24H</button>
+                <button class="range-btn" data-range="7d">7D</button>
+            </div>
+            <span class="last-poll" id="lastPoll">Waiting for data...</span>
+        </div>
+    </header>
+
+    <main>
+        <!-- Host Status Cards -->
+        <section class="host-cards" id="hostCards">
+            <div class="card host-card" id="hostCpu">
+                <div class="card-label">Host CPU</div>
+                <div class="card-value" id="hostCpuVal">--%</div>
+                <canvas class="sparkline" id="sparkHostCpu" width="120" height="36"></canvas>
+            </div>
+            <div class="card host-card" id="hostMem">
+                <div class="card-label">Memory</div>
+                <div class="card-value" id="hostMemVal">--%</div>
+                <canvas class="sparkline" id="sparkHostMem" width="120" height="36"></canvas>
+            </div>
+            <div class="card host-card" id="hostDiskIo">
+                <div class="card-label">Disk I/O</div>
+                <div class="card-value" id="hostDiskVal">-- / --</div>
+                <canvas class="sparkline" id="sparkHostDisk" width="120" height="36"></canvas>
+            </div>
+            <div class="card host-card volumes-card" id="hostVolumes">
+                <div class="card-label">Storage</div>
+                <div id="volumesList"></div>
+            </div>
+        </section>
+
+        <!-- Alert Banner -->
+        <section class="alerts-banner" id="alertsBanner" style="display:none;">
+            <div class="alerts-header">Active Alerts</div>
+            <div id="alertsList"></div>
+        </section>
+
+        <!-- System Health + Events Row -->
+        <section class="system-row">
+            <div class="card system-info-card">
+                <div class="card-label">System Health</div>
+                <div class="sysinfo-grid">
+                    <div class="sysinfo-item">
+                        <span class="sysinfo-label">Host</span>
+                        <span class="sysinfo-value" id="sysHost">--</span>
+                    </div>
+                    <div class="sysinfo-item">
+                        <span class="sysinfo-label">OS</span>
+                        <span class="sysinfo-value" id="sysOs">--</span>
+                    </div>
+                    <div class="sysinfo-item">
+                        <span class="sysinfo-label">Uptime</span>
+                        <span class="sysinfo-value" id="sysUptime">--</span>
+                    </div>
+                    <div class="sysinfo-item">
+                        <span class="sysinfo-label">Last Boot</span>
+                        <span class="sysinfo-value" id="sysLastBoot">--</span>
+                    </div>
+                    <div class="sysinfo-item">
+                        <span class="sysinfo-label">Pending Updates</span>
+                        <span class="sysinfo-value" id="sysUpdates">--</span>
+                    </div>
+                </div>
+                <div class="reboot-history">
+                    <div class="sysinfo-label" style="margin-top:12px;">Recent Reboots</div>
+                    <ul id="rebootList" class="reboot-list"></ul>
+                </div>
+            </div>
+
+            <div class="card events-card">
+                <div class="card-label">
+                    Recent High-Risk Events
+                    <span class="events-count" id="eventsCount"></span>
+                </div>
+                <div id="eventsList" class="events-list">
+                    <div class="text-dim no-events">Loading events...</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- VM Grid -->
+        <section class="vm-grid" id="vmGrid"></section>
+
+        <!-- Detail Charts -->
+        <section class="detail-charts">
+            <div class="chart-tabs" id="chartTabs">
+                <button class="tab-btn active" data-tab="cpu">CPU</button>
+                <button class="tab-btn" data-tab="memory">Memory</button>
+                <button class="tab-btn" data-tab="network">Network</button>
+                <button class="tab-btn" data-tab="diskio">Disk I/O</button>
+                <button class="tab-btn" data-tab="storage">Storage</button>
+            </div>
+            <div class="chart-container">
+                <canvas id="detailChart"></canvas>
+            </div>
+        </section>
+    </main>
+
+    <script src="/static/js/chart.umd.min.js"></script>
+    <script src="/static/js/charts.js"></script>
+    <script src="/static/js/alerts.js"></script>
+    <script src="/static/js/dashboard.js"></script>
+</body>
+</html>

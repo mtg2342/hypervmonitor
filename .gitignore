@@ -1,0 +1,32 @@
+# SQLite database — never overwrite the host's history on update
+hyperv_monitor.db
+hyperv_monitor.db-wal
+hyperv_monitor.db-shm
+*.db
+*.db-wal
+*.db-shm
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# Local config overrides
+config.local.py
+.env
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~
+
+# Logs
+*.log
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
