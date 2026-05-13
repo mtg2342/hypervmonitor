@@ -801,6 +801,16 @@ main {
     word-break: break-word;
 }
 
+.veeam-state.info .veeam-state-subtle {
+    color: var(--text-3);
+    font-size: 10px;
+    font-weight: 500;
+}
+.veeam-state.info .veeam-state-subtle code {
+    color: var(--text-2);
+    font-family: 'JetBrains Mono', Consolas, monospace;
+}
+
 /* ── VM IP chip ──────────────────────────────────────────────────────── */
 
 .vm-ip {

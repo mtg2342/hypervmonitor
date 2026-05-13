@@ -885,6 +885,26 @@ class MetricCollector:
         err    = data.get("Error")
         jobs   = _ensure_list(data.get("Jobs"))
 
+        # ── Event-log fallback ──────────────────────────────────────────────
+        # When the B&R cmdlets either aren't installed (Veeam Agent free
+        # edition has no PowerShell module, just GUI + CLI) or returned no
+        # jobs, scrape the Windows Event Log. Both the Agent and B&R write
+        # backup completion events to the "Veeam Backup" / "Veeam Agent" logs.
+        if status in ("not_loaded", "no_jobs", "error") or len(jobs) == 0:
+            log_jobs, log_diag = self._collect_veeam_eventlog(ts)
+            if log_jobs:
+                jobs = log_jobs
+                if loaded:
+                    loaded = loaded + " + EventLog"
+                else:
+                    loaded = "Windows Event Log"
+                status = "ok"
+                err = None
+            else:
+                # Append event-log diagnostic to whatever the cmdlet path said
+                if log_diag:
+                    err = ((err or "") + " | EventLog: " + log_diag).strip(" |")
+
         # Persist status row
         conn.execute(
             """UPDATE veeam_status SET last_check_ts=?, status=?, module_used=?, error_message=?, jobs_count=?
@@ -938,3 +958,83 @@ class MetricCollector:
                            (err or "")[:300])
         else:
             logger.warning("Veeam: %s (loaded=%s): %s", status, loaded, (err or "")[:300])
+
+    def _collect_veeam_eventlog(self, ts):
+        """Universal Veeam backup-status fallback that reads the Windows Event
+        Log. Works for Veeam Agent for Windows (free) AND B&R, because both
+        write session completion events to a 'Veeam Backup' / 'Veeam Agent' /
+        Application log channel.
+
+        Returns (list_of_job_dicts, diagnostic_string).
+        """
+        script = (
+            "$results = @(); "
+            "$diagParts = @(); "
+            "$candidateLogs = @('Veeam Backup', 'Veeam Agent', 'Veeam Endpoint Backup', 'Application'); "
+            "$cutoff = (Get-Date).AddDays(-30); "
+            "foreach ($logName in $candidateLogs) { "
+            "  try { "
+            "    $evs = Get-WinEvent -FilterHashtable @{LogName=$logName; StartTime=$cutoff} "
+            "           -MaxEvents 2000 -ErrorAction Stop | "
+            "           Where-Object { $_.ProviderName -like '*Veeam*' }; "
+            "    if ($evs) { $diagParts += \"$logName : $($evs.Count) Veeam event(s)\"; $results += $evs } "
+            "  } catch { "
+            "    $diagParts += \"$logName : $($_.Exception.Message.Split([Environment]::NewLine)[0])\" "
+            "  } "
+            "}; "
+            "if ($results.Count -eq 0) { "
+            "  Write-Output (@{Jobs=@(); Diag=($diagParts -join '; ')} | ConvertTo-Json -Compress -Depth 3); "
+            "  exit "
+            "}; "
+            # Parse each event to extract (job name, result, time)
+            "$jobMap = @{}; "
+            "foreach ($e in $results) { "
+            "  $msg = $e.Message; "
+            "  if (-not $msg) { continue }; "
+            "  $jobName = $null; "
+            "  if     ($msg -match \"[Jj]ob\\s+['""\\u2019\\u201D](.+?)['""\\u2019\\u201D]\")     { $jobName = $matches[1] } "
+            "  elseif ($msg -match \"[Jj]ob\\s+\\[(.+?)\\]\")                                   { $jobName = $matches[1] } "
+            "  elseif ($msg -match \"Backup\\s+(?:of\\s+|job\\s+)?['""]?([^'""\\s].{1,80}?)['""]?\\s+(?:has\\s+)?(?:completed|finished|failed|succeeded)\") { $jobName = $matches[1].Trim() } "
+            "  if (-not $jobName) { continue }; "
+            "  $result = $null; "
+            "  if     ($e.Id -in @(110, 111))                          { $result = 'Success' } "
+            "  elseif ($e.Id -in @(190))                                { $result = 'Warning' } "
+            "  elseif ($e.Id -in @(191, 192, 193, 194))                { $result = 'Failed' } "
+            "  elseif ($msg -match 'completed\\s+successfully')        { $result = 'Success' } "
+            "  elseif ($msg -match 'with\\s+warnings?')                { $result = 'Warning' } "
+            "  elseif ($msg -match '(?i)\\bfail(?:ed|ure)?\\b|\\berror\\b') { $result = 'Failed' } "
+            "  if (-not $result) { continue }; "
+            "  if (-not $jobMap.ContainsKey($jobName) -or $e.TimeCreated -gt $jobMap[$jobName].TimeRaw) { "
+            "    $jobMap[$jobName] = @{ "
+            "      Name = $jobName; "
+            "      Result = $result; "
+            "      TimeRaw = $e.TimeCreated; "
+            "      EndTs = [int][DateTimeOffset]::new($e.TimeCreated).ToUnixTimeSeconds(); "
+            "      Source = $e.ProviderName "
+            "    } "
+            "  } "
+            "}; "
+            "$out = @(); "
+            "foreach ($k in $jobMap.Keys) { "
+            "  $j = $jobMap[$k]; "
+            "  $out += [PSCustomObject]@{ "
+            "    Name = $j.Name; "
+            "    Type = if ($j.Source -like '*Endpoint*') { 'Agent' } else { 'Backup' }; "
+            "    Result = $j.Result; "
+            "    State = 'Stopped'; "
+            "    StartTs = 0; "
+            "    EndTs = $j.EndTs; "
+            "    DurationSec = 0; "
+            "    ScheduleEnabled = 1 "
+            "  } "
+            "}; "
+            "Write-Output (@{Jobs=$out; Diag=($diagParts -join '; ')} | ConvertTo-Json -Compress -Depth 4)"
+        )
+        data = ps_json(script, timeout=60)
+        if not isinstance(data, dict):
+            return [], "EventLog scrape returned no parseable output"
+        jobs = _ensure_list(data.get("Jobs"))
+        diag = data.get("Diag", "") or ""
+        if jobs:
+            logger.info("Veeam: event-log fallback found %d job(s) (%s)", len(jobs), diag[:200])
+        return jobs, diag

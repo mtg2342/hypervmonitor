@@ -599,7 +599,13 @@ function renderVeeam(d) {
     const lastTs = status.last_check_ts;
 
     if (s === 'ok' && jobs.length > 0) {
-        stateEl.className = 'veeam-state hidden';
+        // Quiet info line — what source produced the data
+        if (moduleUsed) {
+            stateEl.className = 'veeam-state info';
+            stateEl.innerHTML = `<div class="veeam-state-subtle">Source: <code>${escapeHtml(moduleUsed)}</code></div>`;
+        } else {
+            stateEl.className = 'veeam-state hidden';
+        }
     } else if (s === 'not_loaded') {
         stateEl.className = 'veeam-state warn';
         stateEl.innerHTML = `
