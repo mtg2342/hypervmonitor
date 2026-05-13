@@ -177,6 +177,82 @@ def vms_history():
     return jsonify(_query_vms_history(range_key, vm_name))
 
 
+@app.route("/api/vms/bandwidth")
+def vms_bandwidth():
+    """Per-VM network traffic totals over the last N days.
+
+    Strategy: hourly aggregates cover everything from N days ago through the
+    most recently completed hour. Raw 30-second samples fill in the current
+    in-progress hour (raw data is kept for 48h, so this works for any N).
+    Each hourly row contributes  avg_rate * 3600 bytes; each raw row
+    contributes  rate * 30 bytes.
+    """
+    days = max(1, min(request.args.get("days", 30, type=int), 365))
+    now = time.time()
+    cutoff = now - (days * 86400)
+
+    conn = get_connection()
+    try:
+        totals = {}
+
+        # Hourly aggregates → bytes per hour
+        hourly_rows = conn.execute(
+            """SELECT vm_name,
+                      SUM(COALESCE(net_sent_avg, 0)) * 3600 AS sent,
+                      SUM(COALESCE(net_recv_avg, 0)) * 3600 AS recv
+               FROM vm_metrics_hourly
+               WHERE bucket_ts >= ?
+               GROUP BY vm_name""",
+            (cutoff,),
+        ).fetchall()
+        for r in hourly_rows:
+            totals[r["vm_name"]] = {
+                "sent_bytes": r["sent"] or 0,
+                "recv_bytes": r["recv"] or 0,
+            }
+
+        # Raw data after the last completed hourly bucket (current partial hour)
+        last_hour = conn.execute(
+            "SELECT COALESCE(MAX(bucket_ts), 0) + 3600 FROM vm_metrics_hourly"
+        ).fetchone()[0]
+        raw_start = max(last_hour or 0, cutoff)
+        raw_rows = conn.execute(
+            """SELECT vm_name,
+                      SUM(COALESCE(net_sent_bps, 0)) * 30 AS sent,
+                      SUM(COALESCE(net_recv_bps, 0)) * 30 AS recv
+               FROM vm_metrics
+               WHERE ts >= ?
+               GROUP BY vm_name""",
+            (raw_start,),
+        ).fetchall()
+        for r in raw_rows:
+            d = totals.setdefault(r["vm_name"], {"sent_bytes": 0, "recv_bytes": 0})
+            d["sent_bytes"] += r["sent"] or 0
+            d["recv_bytes"] += r["recv"] or 0
+
+        vms = [
+            {
+                "vm_name":   name,
+                "sent_bytes": v["sent_bytes"],
+                "recv_bytes": v["recv_bytes"],
+                "total_bytes": v["sent_bytes"] + v["recv_bytes"],
+            }
+            for name, v in totals.items()
+        ]
+        vms.sort(key=lambda x: x["total_bytes"], reverse=True)
+
+        return jsonify({
+            "days": days,
+            "from_ts": cutoff,
+            "total_bytes": sum(v["total_bytes"] for v in vms),
+            "total_sent_bytes": sum(v["sent_bytes"] for v in vms),
+            "total_recv_bytes": sum(v["recv_bytes"] for v in vms),
+            "vms": vms,
+        })
+    finally:
+        conn.close()
+
+
 @app.route("/api/vhd/current")
 def vhd_current():
     conn = get_connection()

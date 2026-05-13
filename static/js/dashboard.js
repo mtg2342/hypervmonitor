@@ -84,12 +84,14 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchAlerts();
     fetchSystemInfo();
     fetchSystemEvents();
+    fetchBandwidth();
     refreshCharts();
 
     setInterval(fetchLiveData, 5000);
     setInterval(fetchAlerts, 10000);
     setInterval(fetchSystemInfo, 30000);
     setInterval(fetchSystemEvents, 60000);
+    setInterval(fetchBandwidth, 300000);  // 5 minutes — slow-moving
     setInterval(refreshCharts, 60000);
 });
 
@@ -446,6 +448,128 @@ function setUpdateStatus(msg, level) {
     if (!el) return;
     el.textContent = msg;
     el.className = 'update-status ' + (level || '');
+}
+
+
+// ── Alert History ───────────────────────────────────────────────────────────
+
+// ── Bandwidth (30-day VM traffic) ───────────────────────────────────────────
+
+let bandwidthByVm = {};      // {vm_name: {sent_bytes, recv_bytes, total_bytes}}
+
+function fetchBandwidth() {
+    fetch('/api/vms/bandwidth?days=30')
+        .then(r => r.json())
+        .then(d => renderBandwidth(d))
+        .catch(() => {});
+}
+
+function renderBandwidth(d) {
+    if (!d || !d.vms) return;
+
+    // Cache for VM card footers
+    bandwidthByVm = {};
+    d.vms.forEach(v => { bandwidthByVm[v.vm_name] = v; });
+
+    // Update existing VM cards' footers
+    document.querySelectorAll('.vm-card').forEach(card => {
+        const id = card.id;
+        if (!id || !id.startsWith('vm-')) return;
+        applyVmFooter(card);
+    });
+
+    // Top-line summary on dashboard
+    const lbl = document.getElementById('bwTotalLabel');
+    if (lbl) lbl.textContent = formatGB(d.total_bytes);
+    setText('bwTotal', formatGB(d.total_bytes));
+    setText('bwSent',  formatGB(d.total_sent_bytes));
+    setText('bwRecv',  formatGB(d.total_recv_bytes));
+    setText('bwTopVm', d.vms.length ? `${d.vms[0].vm_name} (${formatGB(d.vms[0].total_bytes)})` : '—');
+
+    const bars = document.getElementById('bandwidthBars');
+    if (!bars) return;
+    if (d.vms.length === 0) {
+        bars.innerHTML = '<div class="no-events">No VM traffic recorded in the last 30 days.</div>';
+        return;
+    }
+    const maxTotal = d.vms[0].total_bytes || 1;
+    bars.innerHTML = d.vms.map(v => {
+        const total = v.total_bytes || 0;
+        const sentPct = (v.sent_bytes / maxTotal) * 100;
+        const recvPct = (v.recv_bytes / maxTotal) * 100;
+        return `
+            <div class="bw-row">
+                <span class="bw-row-name">${escapeHtml(v.vm_name)}</span>
+                <div class="bw-row-bar-bg">
+                    <div class="bw-row-bar-sent" style="width:${sentPct}%"
+                         title="Sent: ${formatGB(v.sent_bytes)}"></div>
+                    <div class="bw-row-bar-recv" style="width:${recvPct}%"
+                         title="Received: ${formatGB(v.recv_bytes)}"></div>
+                </div>
+                <span class="bw-row-total">
+                    ${formatGB(total)}
+                    <span class="bw-up" title="sent">↑${formatGBShort(v.sent_bytes)}</span>
+                    <span class="bw-down" title="received">↓${formatGBShort(v.recv_bytes)}</span>
+                </span>
+            </div>
+        `;
+    }).join('');
+}
+
+function applyVmFooter(card) {
+    // VM name is stored as the card id suffix; but cssId strips chars. Use the displayed name instead.
+    const nameEl = card.querySelector('.vm-name');
+    const vmName = nameEl ? nameEl.textContent : '';
+    const d = bandwidthByVm[vmName];
+    let footer = card.querySelector('.vm-footer');
+    if (!d) {
+        if (footer) footer.remove();
+        return;
+    }
+    if (!footer) {
+        footer = document.createElement('div');
+        footer.className = 'vm-footer';
+        card.appendChild(footer);
+    }
+    footer.innerHTML = `
+        <span class="vm-footer-label">30d Network</span>
+        <span class="vm-footer-value">
+            ${formatGB(d.total_bytes)}
+            <span class="bw-up">↑${formatGBShort(d.sent_bytes)}</span>
+            <span class="bw-down">↓${formatGBShort(d.recv_bytes)}</span>
+        </span>
+    `;
+}
+
+function setText(id, val) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val;
+}
+
+function formatGB(bytes) {
+    if (bytes == null || !isFinite(bytes)) return '—';
+    const gb = bytes / (1024 ** 3);
+    if (gb >= 1000) return (gb / 1000).toFixed(2) + ' TB';
+    if (gb >= 10)   return gb.toFixed(1) + ' GB';
+    if (gb >= 1)    return gb.toFixed(2) + ' GB';
+    const mb = bytes / (1024 ** 2);
+    if (mb >= 1)    return mb.toFixed(0) + ' MB';
+    const kb = bytes / 1024;
+    if (kb >= 1)    return kb.toFixed(0) + ' KB';
+    return Math.round(bytes) + ' B';
+}
+
+function formatGBShort(bytes) {
+    if (bytes == null || !isFinite(bytes)) return '—';
+    const gb = bytes / (1024 ** 3);
+    if (gb >= 1000) return (gb / 1000).toFixed(1) + 'T';
+    if (gb >= 10)   return gb.toFixed(0) + 'G';
+    if (gb >= 1)    return gb.toFixed(1) + 'G';
+    const mb = bytes / (1024 ** 2);
+    if (mb >= 1)    return mb.toFixed(0) + 'M';
+    const kb = bytes / 1024;
+    if (kb >= 1)    return kb.toFixed(0) + 'K';
+    return Math.round(bytes) + 'B';
 }
 
 
@@ -937,6 +1061,7 @@ function updateVmGrid(vms) {
             grid.appendChild(card);
         }
         updateVmCard(card, vm);
+        applyVmFooter(card);
     }
 
     const currentNames = new Set(vms.map(v => 'vm-' + cssId(v.vm_name)));

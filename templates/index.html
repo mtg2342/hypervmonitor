@@ -77,6 +77,35 @@
             <div id="alertsList"></div>
         </section>
 
+        <!-- VM Bandwidth (Last 30 Days) -->
+        <div class="section-title">
+            VM Network · Last 30 Days
+            <span class="count" id="bwTotalLabel">—</span>
+        </div>
+        <section class="card bandwidth-card" id="bandwidthCard">
+            <div class="bandwidth-summary">
+                <div class="bw-summary-item">
+                    <span class="sysinfo-label">Total</span>
+                    <span class="bw-summary-value" id="bwTotal">—</span>
+                </div>
+                <div class="bw-summary-item">
+                    <span class="sysinfo-label">Sent ↑</span>
+                    <span class="bw-summary-value" id="bwSent">—</span>
+                </div>
+                <div class="bw-summary-item">
+                    <span class="sysinfo-label">Received ↓</span>
+                    <span class="bw-summary-value" id="bwRecv">—</span>
+                </div>
+                <div class="bw-summary-item">
+                    <span class="sysinfo-label">Top VM</span>
+                    <span class="bw-summary-value" id="bwTopVm">—</span>
+                </div>
+            </div>
+            <div class="bandwidth-bars" id="bandwidthBars">
+                <div class="no-events">Loading 30-day totals…</div>
+            </div>
+        </section>
+
         <!-- System + Events -->
         <div class="section-title">System Health</div>
         <section class="system-row">
