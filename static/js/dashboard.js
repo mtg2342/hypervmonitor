@@ -121,6 +121,178 @@ function switchView(name) {
         fetchSecurityStatus();
         fetchRdpLogins();
     }
+    if (name === 'settings') {
+        fetchSettings();
+    }
+}
+
+
+// ── Settings ────────────────────────────────────────────────────────────────
+
+let settingsBaseline = {};   // server-side effective values when the form was last loaded
+let settingsDefaults = {};
+let settingsBound = false;
+
+function fetchSettings() {
+    fetch('/api/settings')
+        .then(r => r.json())
+        .then(d => {
+            settingsBaseline = Object.assign({}, d.effective);
+            settingsDefaults = Object.assign({}, d.defaults);
+            populateSettingsForm(d.effective);
+            updateDerivedLabels();
+            bindSettingsHandlers();
+            updateSettingsDirty();
+            setSettingsStatus('Loaded.', 'ok');
+        })
+        .catch(() => setSettingsStatus('Failed to load settings.', 'err'));
+}
+
+function populateSettingsForm(eff) {
+    document.querySelectorAll('[data-setting]').forEach(input => {
+        const key = input.dataset.setting;
+        if (eff[key] != null) input.value = eff[key];
+        input.classList.remove('changed', 'invalid');
+    });
+}
+
+function updateDerivedLabels() {
+    document.querySelectorAll('[data-show]').forEach(el => {
+        const key = el.dataset.show;
+        const input = document.querySelector(`[data-setting="${key}"]`);
+        el.textContent = input ? input.value : '';
+    });
+    document.querySelectorAll('[data-show-mult]').forEach(el => {
+        const key = el.dataset.showMult;
+        const mult = parseInt(el.dataset.mult, 10) || 1;
+        const input = document.querySelector(`[data-setting="${key}"]`);
+        const v = input ? parseInt(input.value, 10) : NaN;
+        el.textContent = isFinite(v) ? (v * mult) : '?';
+    });
+}
+
+function bindSettingsHandlers() {
+    if (settingsBound) return;
+    settingsBound = true;
+
+    document.querySelectorAll('[data-setting]').forEach(input => {
+        input.addEventListener('input', () => {
+            updateDerivedLabels();
+            updateSettingsDirty();
+        });
+    });
+
+    document.getElementById('settingsSave').addEventListener('click', saveSettings);
+    document.getElementById('settingsReset').addEventListener('click', resetSettings);
+}
+
+function updateSettingsDirty() {
+    let dirty = false;
+    let invalid = false;
+    document.querySelectorAll('[data-setting]').forEach(input => {
+        const key = input.dataset.setting;
+        const raw = input.value;
+        const v = Number(raw);
+        const min = Number(input.min);
+        const max = Number(input.max);
+        const isInvalid = raw === '' || !isFinite(v) || v < min || v > max;
+        input.classList.toggle('invalid', isInvalid);
+        if (isInvalid) invalid = true;
+        const baseline = settingsBaseline[key];
+        if (!isInvalid && baseline != null && Number(baseline) !== v) {
+            input.classList.add('changed');
+            dirty = true;
+        } else {
+            input.classList.remove('changed');
+        }
+    });
+
+    // Cross-field: critical >= warning
+    const pairs = ['host_cpu','host_mem','host_disk','vm_cpu','vm_mem'];
+    let crossWarn = '';
+    for (const p of pairs) {
+        const w = Number(document.querySelector(`[data-setting="${p}_warning"]`)?.value);
+        const c = Number(document.querySelector(`[data-setting="${p}_critical"]`)?.value);
+        if (isFinite(w) && isFinite(c) && c < w) {
+            crossWarn = `${p.replace('_',' ')}: critical (${c}) is below warning (${w})`;
+            break;
+        }
+    }
+
+    const btn = document.getElementById('settingsSave');
+    btn.disabled = !dirty || invalid;
+
+    if (invalid) {
+        setSettingsStatus('Some values are out of range.', 'err');
+    } else if (crossWarn) {
+        setSettingsStatus('Heads up: ' + crossWarn, 'warn');
+    } else if (dirty) {
+        setSettingsStatus('Unsaved changes.', 'warn');
+    } else {
+        setSettingsStatus('', '');
+    }
+}
+
+function collectSettings() {
+    const out = {};
+    document.querySelectorAll('[data-setting]').forEach(input => {
+        const key = input.dataset.setting;
+        out[key] = input.value;
+    });
+    return out;
+}
+
+function saveSettings() {
+    const btn = document.getElementById('settingsSave');
+    btn.disabled = true;
+    setSettingsStatus('Saving…', 'warn');
+    fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ settings: collectSettings() }),
+    })
+    .then(r => r.json())
+    .then(d => {
+        if (!d.ok) {
+            setSettingsStatus('Save failed.', 'err');
+            return;
+        }
+        settingsBaseline = Object.assign({}, d.effective);
+        populateSettingsForm(d.effective);
+        updateDerivedLabels();
+        updateSettingsDirty();
+        if (d.errors && d.errors.length) {
+            setSettingsStatus('Saved with warnings: ' + d.errors[0], 'warn');
+        } else {
+            setSettingsStatus('Saved. New thresholds active within 30 s.', 'ok');
+        }
+    })
+    .catch(() => setSettingsStatus('Save failed.', 'err'));
+}
+
+function resetSettings() {
+    if (!confirm('Reset all alert thresholds to their defaults?')) return;
+    fetch('/api/settings/reset', { method: 'POST' })
+        .then(r => r.json())
+        .then(d => {
+            if (!d.ok) {
+                setSettingsStatus('Reset failed.', 'err');
+                return;
+            }
+            settingsBaseline = Object.assign({}, d.effective);
+            populateSettingsForm(d.effective);
+            updateDerivedLabels();
+            updateSettingsDirty();
+            setSettingsStatus('Defaults restored.', 'ok');
+        })
+        .catch(() => setSettingsStatus('Reset failed.', 'err'));
+}
+
+function setSettingsStatus(msg, level) {
+    const el = document.getElementById('settingsStatus');
+    if (!el) return;
+    el.textContent = msg;
+    el.className = 'settings-status ' + (level || '');
 }
 
 

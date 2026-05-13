@@ -1003,6 +1003,160 @@ main {
     color: var(--accent);
 }
 
+/* ── Settings view ────────────────────────────────────────────────────── */
+
+.settings-card { padding: 20px 24px; }
+
+.settings-intro {
+    color: var(--text-2);
+    font-size: 12px;
+    margin-bottom: 16px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border-soft);
+}
+
+.settings-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 16px;
+}
+
+.settings-group {
+    background: var(--bg);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius-sm);
+    padding: 14px 16px;
+}
+
+.settings-group-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    margin-bottom: 4px;
+}
+
+.settings-help {
+    font-size: 11px;
+    color: var(--text-3);
+    line-height: 1.4;
+    margin-bottom: 12px;
+}
+
+.settings-help em { color: var(--text-2); font-style: italic; }
+
+.settings-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.settings-row:last-child { margin-bottom: 0; }
+
+.settings-row label {
+    font-size: 12px;
+    color: var(--text-2);
+    font-weight: 500;
+    width: 90px;
+    flex-shrink: 0;
+}
+
+.settings-row input[type="number"] {
+    width: 70px;
+    background: var(--bg-elev-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
+    padding: 5px 8px;
+    font-family: inherit;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    transition: border-color 0.15s, background 0.15s;
+}
+
+.settings-row input[type="number"]:focus {
+    outline: none;
+    border-color: var(--accent);
+    background: var(--bg-elev-1);
+}
+
+.settings-row input[type="number"].changed {
+    border-color: var(--amber);
+    background: rgba(245, 177, 74, 0.05);
+}
+
+.settings-row input[type="number"].invalid {
+    border-color: var(--red);
+    background: rgba(255, 107, 107, 0.05);
+}
+
+.settings-row input[type="number"]::-webkit-inner-spin-button,
+.settings-row input[type="number"]::-webkit-outer-spin-button {
+    opacity: 0.4;
+}
+
+.settings-unit {
+    font-size: 11px;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
+}
+
+.settings-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-soft);
+}
+
+.settings-spacer { flex: 1; }
+
+.settings-status {
+    font-size: 12px;
+    color: var(--text-3);
+    font-weight: 500;
+}
+
+.settings-status.ok    { color: var(--green); }
+.settings-status.err   { color: var(--red); }
+.settings-status.warn  { color: var(--amber); }
+
+.btn-primary, .btn-secondary {
+    border: 1px solid var(--border);
+    padding: 7px 16px;
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all 0.15s;
+    font-family: inherit;
+}
+
+.btn-primary {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+}
+.btn-primary:hover:not(:disabled) { filter: brightness(1.1); }
+.btn-primary:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    background: var(--bg-elev-2);
+    color: var(--text-3);
+    border-color: var(--border);
+}
+
+.btn-secondary {
+    background: var(--bg-elev-2);
+    color: var(--text-2);
+}
+.btn-secondary:hover { background: var(--bg-hover); color: var(--text); }
+
 /* Scrollbars (subtle) */
 
 ::-webkit-scrollbar { width: 8px; height: 8px; }

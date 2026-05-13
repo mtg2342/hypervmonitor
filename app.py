@@ -4,7 +4,7 @@ import logging
 from flask import Flask, jsonify, request, render_template
 from db import init_db, get_connection
 from collector import MetricCollector
-from alerts import evaluate_alerts
+from alerts import evaluate_alerts, get_settings, get_default_settings, save_settings
 from config import FLASK_HOST, FLASK_PORT, RANGE_SECONDS, RANGE_SOURCE, DB_PATH
 
 logging.basicConfig(
@@ -248,6 +248,53 @@ def security_status():
         d.pop("findings_json", None)
         d["updates_pending"] = (sysinfo["updates_pending"] if sysinfo else None)
         return jsonify(d)
+    finally:
+        conn.close()
+
+
+@app.route("/api/settings", methods=["GET"])
+def settings_get():
+    conn = get_connection()
+    try:
+        eff = get_settings(conn)
+        defaults = get_default_settings()
+        overrides = {r["key"]: r["value"]
+                     for r in conn.execute("SELECT key, value FROM app_settings").fetchall()}
+        return jsonify({
+            "effective": eff,
+            "defaults":  defaults,
+            "overrides": overrides,
+        })
+    finally:
+        conn.close()
+
+
+@app.route("/api/settings", methods=["POST"])
+def settings_save():
+    payload = request.get_json(silent=True) or {}
+    updates = payload.get("settings") or {}
+    if not isinstance(updates, dict):
+        return jsonify({"ok": False, "error": "settings must be an object"}), 400
+    conn = get_connection()
+    try:
+        saved, errors = save_settings(conn, updates)
+        return jsonify({
+            "ok": True,
+            "saved": saved,
+            "errors": errors,
+            "effective": get_settings(conn),
+        })
+    finally:
+        conn.close()
+
+
+@app.route("/api/settings/reset", methods=["POST"])
+def settings_reset():
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM app_settings")
+        conn.commit()
+        return jsonify({"ok": True, "effective": get_settings(conn)})
     finally:
         conn.close()
 

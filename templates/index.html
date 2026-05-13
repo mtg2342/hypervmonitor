@@ -23,6 +23,7 @@
                 Alert History
                 <span class="nav-badge" id="navAlertCount" style="display:none;">0</span>
             </button>
+            <button class="nav-btn" data-view="settings">Settings</button>
         </nav>
         <div class="header-controls">
             <div class="range-buttons" id="rangeButtons">
@@ -283,6 +284,112 @@
             </div>
         </section>
       </div><!-- /view-security -->
+
+      <!-- ───────────────────────── Settings View ───────────────────────── -->
+      <div id="view-settings" class="view">
+        <div class="section-title">Settings</div>
+
+        <section class="card settings-card">
+            <div class="settings-intro">
+                Configure when the dashboard raises warnings. Values are percentages.
+                Changes apply on the next poll (≤30 s) and persist across updates.
+            </div>
+
+            <div class="settings-grid">
+                <div class="settings-group">
+                    <h3 class="settings-group-title">Host CPU</h3>
+                    <div class="settings-help">Sustained over <span data-show="sustained_polls">3</span> polls (~<span data-show-mult="sustained_polls" data-mult="30">90</span>s) before alerting.</div>
+                    <div class="settings-row">
+                        <label>Warning ≥</label>
+                        <input type="number" min="1" max="100" step="1" data-setting="host_cpu_warning">
+                        <span class="settings-unit">%</span>
+                    </div>
+                    <div class="settings-row">
+                        <label>Critical ≥</label>
+                        <input type="number" min="1" max="100" step="1" data-setting="host_cpu_critical">
+                        <span class="settings-unit">%</span>
+                    </div>
+                </div>
+
+                <div class="settings-group">
+                    <h3 class="settings-group-title">Host Memory</h3>
+                    <div class="settings-help">Alerts as soon as host RAM committed % crosses the threshold.</div>
+                    <div class="settings-row">
+                        <label>Warning ≥</label>
+                        <input type="number" min="1" max="100" step="1" data-setting="host_mem_warning">
+                        <span class="settings-unit">%</span>
+                    </div>
+                    <div class="settings-row">
+                        <label>Critical ≥</label>
+                        <input type="number" min="1" max="100" step="1" data-setting="host_mem_critical">
+                        <span class="settings-unit">%</span>
+                    </div>
+                </div>
+
+                <div class="settings-group">
+                    <h3 class="settings-group-title">Host Disk Space</h3>
+                    <div class="settings-help">Per volume — alerts when used % crosses threshold.</div>
+                    <div class="settings-row">
+                        <label>Warning ≥</label>
+                        <input type="number" min="1" max="100" step="1" data-setting="host_disk_warning">
+                        <span class="settings-unit">% used</span>
+                    </div>
+                    <div class="settings-row">
+                        <label>Critical ≥</label>
+                        <input type="number" min="1" max="100" step="1" data-setting="host_disk_critical">
+                        <span class="settings-unit">% used</span>
+                    </div>
+                </div>
+
+                <div class="settings-group">
+                    <h3 class="settings-group-title">VM CPU (per VM)</h3>
+                    <div class="settings-help">Same sustained-polls behaviour as host CPU.</div>
+                    <div class="settings-row">
+                        <label>Warning ≥</label>
+                        <input type="number" min="1" max="100" step="1" data-setting="vm_cpu_warning">
+                        <span class="settings-unit">%</span>
+                    </div>
+                    <div class="settings-row">
+                        <label>Critical ≥</label>
+                        <input type="number" min="1" max="100" step="1" data-setting="vm_cpu_critical">
+                        <span class="settings-unit">%</span>
+                    </div>
+                </div>
+
+                <div class="settings-group">
+                    <h3 class="settings-group-title">VM Memory (per VM)</h3>
+                    <div class="settings-help">Compares each VM's memory <em>demand</em> against its assigned RAM.</div>
+                    <div class="settings-row">
+                        <label>Warning ≥</label>
+                        <input type="number" min="1" max="100" step="1" data-setting="vm_mem_warning">
+                        <span class="settings-unit">% of assigned</span>
+                    </div>
+                    <div class="settings-row">
+                        <label>Critical ≥</label>
+                        <input type="number" min="1" max="100" step="1" data-setting="vm_mem_critical">
+                        <span class="settings-unit">% of assigned</span>
+                    </div>
+                </div>
+
+                <div class="settings-group">
+                    <h3 class="settings-group-title">CPU sustained polls</h3>
+                    <div class="settings-help">Number of consecutive polls a CPU value must stay above the threshold before alerting. Each poll is ~30 s.</div>
+                    <div class="settings-row">
+                        <label>Polls</label>
+                        <input type="number" min="1" max="20" step="1" data-setting="sustained_polls">
+                        <span class="settings-unit"><span data-show-mult="sustained_polls" data-mult="30">90</span>s of sustained high CPU</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="settings-actions">
+                <button class="btn-secondary" id="settingsReset">Reset to Defaults</button>
+                <div class="settings-spacer"></div>
+                <span class="settings-status" id="settingsStatus"></span>
+                <button class="btn-primary" id="settingsSave" disabled>Save Changes</button>
+            </div>
+        </section>
+      </div><!-- /view-settings -->
     </main>
 
     <script src="/static/js/chart.umd.min.js"></script>

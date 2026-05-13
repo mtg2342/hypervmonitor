@@ -217,6 +217,14 @@ def init_db(db_path=None):
     """)
     c.execute("CREATE INDEX IF NOT EXISTS idx_rdp_ts ON rdp_logins(ts_event)")
 
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_ts REAL
+        )
+    """)
+
     conn.commit()
     conn.close()
     logger.info("Database initialized at %s", db_path or DB_PATH)
