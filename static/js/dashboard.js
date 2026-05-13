@@ -1299,19 +1299,27 @@ function updateVmCard(card, vm) {
     card.querySelector('[data-field="diskw"]').textContent = formatRate(vm.disk_write_bps);
 
     const hbEl = card.querySelector('[data-field="hb"]');
-    const hb = vm.heartbeat || 'N/A';
-    const shortHb = hb.replace('OkApplications', '').replace('Ok', 'OK');
-    hbEl.textContent = shortHb;
-    hbEl.className = 'vm-metric-value';
-    // Heartbeat states explained:
-    //   OkApplicationsHealthy/Unknown -> green   (integration services healthy)
-    //   N/A                            -> dim    (VM not running)
-    //   NoContact/Disabled/LostComm    -> amber  (ISs not running in guest)
-    //   anything else                  -> red    (real problem)
-    if (hb === 'N/A')                                    hbEl.classList.add('text-dim');
-    else if (hb.includes('Ok'))                          hbEl.classList.add('text-green');
-    else if (/^(NoContact|Disabled|LostComm|NoIntegration)/i.test(hb)) hbEl.classList.add('text-orange');
-    else                                                  hbEl.classList.add('text-red');
+    const hbTile = hbEl.closest('.vm-metric');
+    const hbRaw = (vm.heartbeat == null) ? '' : String(vm.heartbeat).trim();
+    // Hide the whole tile when there's no useful value to display
+    // (empty / Unknown — usually a Hyper-V module hiccup, not an actual state)
+    if (!hbRaw || hbRaw.toLowerCase() === 'unknown') {
+        if (hbTile) hbTile.style.display = 'none';
+    } else {
+        if (hbTile) hbTile.style.display = '';
+        const shortHb = hbRaw.replace('OkApplications', '').replace('Ok', 'OK');
+        hbEl.textContent = shortHb;
+        hbEl.className = 'vm-metric-value';
+        // Colour states:
+        //   N/A                          -> dim    (VM not running, no heartbeat expected)
+        //   Ok*                          -> green  (integration services healthy)
+        //   NoContact/Disabled/LostComm  -> amber  (IS not running in guest)
+        //   anything else                -> red    (real problem)
+        if (hbRaw === 'N/A')                                          hbEl.classList.add('text-dim');
+        else if (hbRaw.includes('Ok'))                                hbEl.classList.add('text-green');
+        else if (/^(NoContact|Disabled|LostComm|NoIntegration)/i.test(hbRaw)) hbEl.classList.add('text-orange');
+        else                                                           hbEl.classList.add('text-red');
+    }
 
     // IPs (internal addresses from Hyper-V integration services)
     const ipWrap = card.querySelector('[data-field="ips"]');
