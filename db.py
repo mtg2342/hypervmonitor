@@ -264,6 +264,25 @@ def init_db(db_path=None):
     """)
     c.execute("INSERT OR IGNORE INTO veeam_status (id) VALUES (1)")
 
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS windows_backup_status (
+            id                INTEGER PRIMARY KEY CHECK (id = 1),
+            last_check_ts     REAL,
+            status            TEXT,    -- 'ok' | 'not_installed' | 'eventlog' | 'no_data' | 'error'
+            source            TEXT,    -- 'WindowsServerBackup module' | 'Event Log' | etc.
+            feature_installed INTEGER,
+            last_backup_ts    REAL,
+            last_success_ts   REAL,
+            next_backup_ts    REAL,
+            last_result       TEXT,    -- 'Success' | 'Failed' | 'Warning' | 'InProgress' | etc.
+            last_result_hr    INTEGER, -- Win32 HRESULT (0 = success)
+            versions          INTEGER,
+            target_label      TEXT,
+            error_message     TEXT
+        )
+    """)
+    c.execute("INSERT OR IGNORE INTO windows_backup_status (id) VALUES (1)")
+
     conn.commit()
     conn.close()
     logger.info("Database initialized at %s", db_path or DB_PATH)

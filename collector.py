@@ -4,6 +4,7 @@ import time
 import threading
 import logging
 from db import get_connection, purge_old_data, rollup_aggregates
+from alerts import is_enabled
 from config import (
     POLL_INTERVAL, VHD_POLL_MULTIPLE, PURGE_CHECK_MULTIPLE,
     SYSINFO_POLL_MULTIPLE, EVENTLOG_POLL_MULTIPLE, UPDATES_POLL_MULTIPLE,
@@ -104,7 +105,10 @@ class MetricCollector:
                 self._collect_security(conn, ts)
                 self._collect_rdp_logins(conn, ts)
             if self._poll_count == 1 or self._poll_count % VEEAM_POLL_MULTIPLE == 0:
-                self._collect_veeam(conn, ts)
+                if is_enabled(conn, "veeam_enabled"):
+                    self._collect_veeam(conn, ts)
+                if is_enabled(conn, "windowsbackup_enabled"):
+                    self._collect_windows_backup(conn, ts)
             if self._poll_count % VHD_POLL_MULTIPLE == 0:
                 self._collect_vhd(conn, ts)
             if self._poll_count == 1 or self._poll_count % UPDATES_POLL_MULTIPLE == 0:
@@ -1038,3 +1042,109 @@ class MetricCollector:
         if jobs:
             logger.info("Veeam: event-log fallback found %d job(s) (%s)", len(jobs), diag[:200])
         return jobs, diag
+
+    # ── Windows Server Backup ────────────────────────────────────────────────
+
+    def _collect_windows_backup(self, conn, ts):
+        """Scan Windows Server Backup state.
+
+        Strategy:
+          1. Try Get-WBSummary (cleanest, most info) via WindowsServerBackup module.
+          2. Fall back to scanning the Microsoft-Windows-Backup event log.
+        """
+        script = (
+            "$out = @{Status='unknown'; FeatureInstalled=0; Source=''; Error=$null}; "
+            # Method 1: WindowsServerBackup module
+            "try { "
+            "  Import-Module WindowsServerBackup -ErrorAction Stop; "
+            "  $out.FeatureInstalled = 1; "
+            "  try { "
+            "    $sum = Get-WBSummary -ErrorAction Stop; "
+            "    if ($sum.LastBackupTime -and $sum.LastBackupTime.Year -gt 1) { "
+            "      $out.LastBackupTs = [int][DateTimeOffset]::new($sum.LastBackupTime).ToUnixTimeSeconds() "
+            "    } else { $out.LastBackupTs = 0 }; "
+            "    if ($sum.LastSuccessfulBackupTime -and $sum.LastSuccessfulBackupTime.Year -gt 1) { "
+            "      $out.LastSuccessTs = [int][DateTimeOffset]::new($sum.LastSuccessfulBackupTime).ToUnixTimeSeconds() "
+            "    } else { $out.LastSuccessTs = 0 }; "
+            "    if ($sum.NextBackupTime -and $sum.NextBackupTime.Year -gt 1) { "
+            "      $out.NextBackupTs = [int][DateTimeOffset]::new($sum.NextBackupTime).ToUnixTimeSeconds() "
+            "    } else { $out.NextBackupTs = 0 }; "
+            "    $out.Versions = [int]$sum.NumberOfVersions; "
+            "    $out.TargetLabel = if ($sum.LastSuccessfulBackupTargetLabel) { \"$($sum.LastSuccessfulBackupTargetLabel)\" } else { '' }; "
+            "    $out.LastResultHR = [int]$sum.LastBackupResultHR; "
+            "    if ($sum.LastBackupResultHR -eq 0) { $out.LastResult = 'Success' } "
+            "    elseif ($out.LastBackupTs -eq 0)    { $out.LastResult = 'NeverRan' } "
+            "    else                                  { $out.LastResult = 'Failed' }; "
+            "    $out.Status = 'ok'; $out.Source = 'WindowsServerBackup module' "
+            "  } catch { $out.Status = 'error'; $out.Error = $_.Exception.Message } "
+            "} catch { "
+            # Method 2: Event log fallback
+            "  $out.FeatureInstalled = 0; "
+            "  try { "
+            "    $evs = Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-Backup'; StartTime=(Get-Date).AddDays(-60)} "
+            "           -MaxEvents 200 -ErrorAction Stop; "
+            "    if ($evs) { "
+            "      $lastAny     = $evs | Sort-Object TimeCreated -Descending | Select-Object -First 1; "
+            "      $lastSuccess = $evs | Where-Object { $_.Id -eq 4 } | Sort-Object TimeCreated -Descending | Select-Object -First 1; "
+            "      $out.LastBackupTs  = [int][DateTimeOffset]::new($lastAny.TimeCreated).ToUnixTimeSeconds(); "
+            "      $out.LastSuccessTs = if ($lastSuccess) { [int][DateTimeOffset]::new($lastSuccess.TimeCreated).ToUnixTimeSeconds() } else { 0 }; "
+            "      switch ($lastAny.Id) { "
+            "        4       { $out.LastResult = 'Success' } "
+            "        5       { $out.LastResult = 'Failed' } "
+            "        14      { $out.LastResult = 'Warning' } "
+            "        17      { $out.LastResult = 'InProgress' } "
+            "        default { $out.LastResult = \"Event $($lastAny.Id)\" } "
+            "      }; "
+            "      $out.Status = 'eventlog'; $out.Source = 'Event Log (Microsoft-Windows-Backup)' "
+            "    } else { "
+            "      $out.Status = 'no_data'; $out.Source = 'Event Log (no entries)' "
+            "    } "
+            "  } catch { "
+            "    $out.Status = 'not_installed'; $out.Error = $_.Exception.Message "
+            "  } "
+            "}; "
+            "$out | ConvertTo-Json -Compress -Depth 3"
+        )
+        data = ps_json(script, timeout=45)
+        if not isinstance(data, dict):
+            conn.execute(
+                """UPDATE windows_backup_status SET
+                    last_check_ts=?, status=?, source=?, feature_installed=?,
+                    error_message=? WHERE id=1""",
+                (ts, "error", None, 0, "Could not parse PowerShell output"),
+            )
+            return
+
+        conn.execute(
+            """UPDATE windows_backup_status SET
+                last_check_ts=?, status=?, source=?, feature_installed=?,
+                last_backup_ts=?, last_success_ts=?, next_backup_ts=?,
+                last_result=?, last_result_hr=?, versions=?, target_label=?,
+                error_message=? WHERE id=1""",
+            (
+                ts,
+                data.get("Status") or "unknown",
+                data.get("Source") or "",
+                int(data.get("FeatureInstalled") or 0),
+                data.get("LastBackupTs") or None,
+                data.get("LastSuccessTs") or None,
+                data.get("NextBackupTs") or None,
+                data.get("LastResult") or None,
+                data.get("LastResultHR"),
+                data.get("Versions") or None,
+                data.get("TargetLabel") or None,
+                data.get("Error") or None,
+            ),
+        )
+
+        status = data.get("Status", "unknown")
+        if status in ("ok", "eventlog"):
+            logger.info(
+                "Windows Backup: %s via %s, last=%s, result=%s",
+                status, data.get("Source"),
+                data.get("LastBackupTs"), data.get("LastResult"),
+            )
+        elif status == "not_installed":
+            logger.info("Windows Backup: feature not installed")
+        else:
+            logger.warning("Windows Backup: %s — %s", status, (data.get("Error") or "")[:200])

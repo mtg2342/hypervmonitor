@@ -112,6 +112,40 @@
             </section>
         </section>
 
+        <!-- Windows Backup -->
+        <section id="windowsBackupSection">
+            <div class="section-title">
+                Windows Backup
+                <span class="count" id="wbStatusPill">—</span>
+                <button class="veeam-refresh-btn" id="wbRefresh" title="Re-scan now">↻ refresh</button>
+            </div>
+            <section class="card wb-card">
+                <div class="veeam-state" id="wbState"></div>
+                <div class="wb-grid" id="wbGrid">
+                    <div class="wb-item">
+                        <span class="sysinfo-label">Last Backup</span>
+                        <span class="wb-value" id="wbLast">—</span>
+                        <span class="card-sub" id="wbLastDate">—</span>
+                    </div>
+                    <div class="wb-item">
+                        <span class="sysinfo-label">Last Success</span>
+                        <span class="wb-value" id="wbSuccess">—</span>
+                        <span class="card-sub" id="wbSuccessDate">—</span>
+                    </div>
+                    <div class="wb-item">
+                        <span class="sysinfo-label">Next Backup</span>
+                        <span class="wb-value" id="wbNext">—</span>
+                        <span class="card-sub" id="wbNextDate">—</span>
+                    </div>
+                    <div class="wb-item">
+                        <span class="sysinfo-label">Versions Stored</span>
+                        <span class="wb-value" id="wbVersions">—</span>
+                        <span class="card-sub" id="wbTarget">—</span>
+                    </div>
+                </div>
+            </section>
+        </section>
+
         <!-- VM Bandwidth (Last 30 Days) -->
         <div class="section-title">
             VM Network · Last 30 Days
@@ -451,6 +485,30 @@
                 <div class="settings-spacer"></div>
                 <span class="settings-status" id="settingsStatus"></span>
                 <button class="btn-primary" id="settingsSave" disabled>Save Changes</button>
+            </div>
+        </section>
+
+        <div class="section-title">Backup Monitoring</div>
+        <section class="card backup-mon-card">
+            <div class="appearance-row">
+                <div class="appearance-text">
+                    <div class="appearance-title">Veeam Backups</div>
+                    <div class="appearance-detail">Scan Veeam B&amp;R cmdlets and the Windows Event Log for backup job status. Works for both Veeam Backup &amp; Replication and the free Veeam Agent.</div>
+                </div>
+                <label class="toggle">
+                    <input type="checkbox" id="veeamToggle" data-setting="veeam_enabled">
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+            <div class="appearance-row" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--border-soft);">
+                <div class="appearance-text">
+                    <div class="appearance-title">Windows Backup</div>
+                    <div class="appearance-detail">Read Windows Server Backup status via <code>Get-WBSummary</code>, with fallback to the Microsoft-Windows-Backup event log. Shows last backup time, result, target, and version count.</div>
+                </div>
+                <label class="toggle">
+                    <input type="checkbox" id="windowsBackupToggle" data-setting="windowsbackup_enabled">
+                    <span class="toggle-slider"></span>
+                </label>
             </div>
         </section>
 

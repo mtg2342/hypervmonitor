@@ -19,7 +19,16 @@ SETTABLE_THRESHOLDS = {
     "vm_mem_critical":    (1, 100),
 }
 SETTABLE_INTS = {
-    "sustained_polls":    (1, 20),
+    "sustained_polls":         (1, 20),
+    # Booleans stored as 0/1 — use the same int infra for validation
+    "veeam_enabled":           (0, 1),
+    "windowsbackup_enabled":   (0, 1),
+}
+
+# Defaults for boolean feature toggles
+DEFAULT_TOGGLES = {
+    "veeam_enabled":         1,
+    "windowsbackup_enabled": 1,
 }
 
 
@@ -27,6 +36,7 @@ def get_settings(conn):
     """Return effective settings = defaults overlaid with rows in app_settings."""
     settings = dict(ALERT_THRESHOLDS)
     settings["sustained_polls"] = SUSTAINED_POLLS
+    settings.update(DEFAULT_TOGGLES)
     rows = conn.execute("SELECT key, value FROM app_settings").fetchall()
     for r in rows:
         k = r["key"]
@@ -45,7 +55,13 @@ def get_default_settings():
     """Return the bundled defaults (read-only — for the UI to display a Reset button)."""
     d = dict(ALERT_THRESHOLDS)
     d["sustained_polls"] = SUSTAINED_POLLS
+    d.update(DEFAULT_TOGGLES)
     return d
+
+
+def is_enabled(conn, key):
+    """Helper: read a boolean feature toggle from app_settings."""
+    return bool(get_settings(conn).get(key, 1))
 
 
 def save_settings(conn, updates):

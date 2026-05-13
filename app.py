@@ -231,6 +231,33 @@ def veeam_refresh():
     return jsonify({"ok": False, "error": "Collector not running"})
 
 
+@app.route("/api/windowsbackup/status")
+def windows_backup_status():
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT * FROM windows_backup_status WHERE id=1").fetchone()
+        return jsonify(dict(row) if row else {})
+    finally:
+        conn.close()
+
+
+@app.route("/api/windowsbackup/refresh", methods=["POST"])
+def windows_backup_refresh():
+    if app.config.get("_collector_instance"):
+        try:
+            import time as _time
+            conn = get_connection()
+            try:
+                app.config["_collector_instance"]._collect_windows_backup(conn, _time.time())
+                conn.commit()
+            finally:
+                conn.close()
+            return jsonify({"ok": True})
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)})
+    return jsonify({"ok": False, "error": "Collector not running"})
+
+
 # ── Auto-update toggle ────────────────────────────────────────────────────────
 
 AUTO_UPDATE_TASK = "HyperVMonitorAutoUpdate"

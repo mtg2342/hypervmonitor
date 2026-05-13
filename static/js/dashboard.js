@@ -100,6 +100,13 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     bindVeeamRefresh();
+    bindWbRefresh();
+    // Apply backup-toggle visibility immediately so disabled sections never
+    // briefly flash before settings load.
+    fetch('/api/settings')
+        .then(r => r.json())
+        .then(d => applyBackupToggleVisibility(d.effective || {}))
+        .catch(() => {});
     fetchLiveData();
     fetchAlerts();
     fetchSystemInfo();
@@ -107,6 +114,7 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchBandwidth();
     fetchSecurityForReboot();
     fetchVeeam();
+    fetchWindowsBackup();
     refreshCharts();
 
     setInterval(fetchLiveData, 5000);
@@ -116,6 +124,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setInterval(fetchBandwidth, 300000);
     setInterval(fetchSecurityForReboot, 60000);   // refresh banner periodically
     setInterval(fetchVeeam, 300000);              // 5 min — Veeam status moves slowly
+    setInterval(fetchWindowsBackup, 300000);      // 5 min — same cadence
     setInterval(refreshCharts, 60000);
 });
 
@@ -179,9 +188,23 @@ function fetchSettings() {
 function populateSettingsForm(eff) {
     document.querySelectorAll('[data-setting]').forEach(input => {
         const key = input.dataset.setting;
-        if (eff[key] != null) input.value = eff[key];
+        if (eff[key] == null) return;
+        if (input.type === 'checkbox') {
+            input.checked = !!Number(eff[key]);
+        } else {
+            input.value = eff[key];
+        }
         input.classList.remove('changed', 'invalid');
     });
+    // Hide the Veeam / Windows Backup dashboard sections when their toggle is off
+    applyBackupToggleVisibility(eff);
+}
+
+function applyBackupToggleVisibility(eff) {
+    const veeam = document.getElementById('veeamSection');
+    const wb = document.getElementById('windowsBackupSection');
+    if (veeam) veeam.style.display = (Number(eff.veeam_enabled) === 0)         ? 'none' : '';
+    if (wb)    wb.style.display    = (Number(eff.windowsbackup_enabled) === 0) ? 'none' : '';
 }
 
 function updateDerivedLabels() {
@@ -221,6 +244,32 @@ function bindSettingsHandlers() {
             applyTheme(e.target.checked ? 'light' : 'dark');
         });
     }
+
+    // Backup monitoring toggles — instant save, no Save Changes button needed
+    document.querySelectorAll('input[type="checkbox"][data-setting]').forEach(cb => {
+        cb.addEventListener('change', () => {
+            const key = cb.dataset.setting;
+            const value = cb.checked ? 1 : 0;
+            fetch('/api/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ settings: { [key]: value } }),
+            })
+            .then(r => r.json())
+            .then(d => {
+                if (!d.ok) {
+                    cb.checked = !cb.checked;
+                    return;
+                }
+                settingsBaseline[key] = value;
+                applyBackupToggleVisibility(d.effective || {});
+                // Re-fetch the affected source so the UI updates immediately
+                if (key === 'veeam_enabled' && value) fetchVeeam();
+                if (key === 'windowsbackup_enabled' && value) fetchWindowsBackup();
+            })
+            .catch(() => { cb.checked = !cb.checked; });
+        });
+    });
 }
 
 function updateSettingsDirty() {
@@ -228,6 +277,11 @@ function updateSettingsDirty() {
     let invalid = false;
     document.querySelectorAll('[data-setting]').forEach(input => {
         const key = input.dataset.setting;
+        if (input.type === 'checkbox') {
+            // Checkboxes save immediately, not via the Save Changes button —
+            // they don't participate in dirty/validation tracking
+            return;
+        }
         const raw = input.value;
         const v = Number(raw);
         const min = Number(input.min);
@@ -274,7 +328,11 @@ function collectSettings() {
     const out = {};
     document.querySelectorAll('[data-setting]').forEach(input => {
         const key = input.dataset.setting;
-        out[key] = input.value;
+        if (input.type === 'checkbox') {
+            out[key] = input.checked ? 1 : 0;
+        } else {
+            out[key] = input.value;
+        }
     });
     return out;
 }
@@ -573,6 +631,111 @@ function bindVeeamRefresh() {
         fetch('/api/veeam/refresh', { method: 'POST' })
             .then(r => r.json())
             .then(() => fetchVeeam())
+            .finally(() => {
+                btn.disabled = false;
+                btn.textContent = prev;
+            });
+    });
+}
+
+
+// ── Windows Backup ──────────────────────────────────────────────────────────
+
+function fetchWindowsBackup() {
+    fetch('/api/windowsbackup/status')
+        .then(r => r.json())
+        .then(d => renderWindowsBackup(d))
+        .catch(() => {});
+}
+
+function renderWindowsBackup(d) {
+    const section = document.getElementById('windowsBackupSection');
+    if (!section) return;
+
+    const state = document.getElementById('wbState');
+    const pill  = document.getElementById('wbStatusPill');
+    d = d || {};
+
+    if (!d.last_check_ts) {
+        state.className = 'veeam-state info';
+        state.innerHTML = '<div>Waiting for the first Windows Backup scan…</div>';
+        pill.className = 'count dim';
+        pill.textContent = '—';
+        return;
+    }
+
+    if (d.status === 'not_installed') {
+        state.className = 'veeam-state info';
+        state.innerHTML = `
+            <div class="veeam-state-title">Windows Server Backup not detected</div>
+            <div>The <code>WindowsServerBackup</code> PowerShell module isn't installed and no backup events are present in the event log. Install the feature via <code>Add-WindowsFeature Windows-Server-Backup</code> if you want to use it.</div>
+        `;
+        pill.className = 'count dim';
+        pill.textContent = 'NOT INSTALLED';
+        // Clear values
+        ['wbLast', 'wbSuccess', 'wbNext', 'wbVersions'].forEach(id => document.getElementById(id).textContent = '—');
+        ['wbLastDate', 'wbSuccessDate', 'wbNextDate', 'wbTarget'].forEach(id => document.getElementById(id).textContent = '');
+        return;
+    }
+
+    if (d.status === 'error') {
+        state.className = 'veeam-state err';
+        state.innerHTML = `
+            <div class="veeam-state-title">Windows Backup error</div>
+            ${d.error_message ? `<div class="veeam-state-error">${escapeHtml(d.error_message)}</div>` : ''}
+        `;
+    } else if (d.source) {
+        state.className = 'veeam-state info';
+        state.innerHTML = `<div class="veeam-state-subtle">Source: <code>${escapeHtml(d.source)}</code></div>`;
+    } else {
+        state.className = 'veeam-state hidden';
+        state.innerHTML = '';
+    }
+
+    // Status pill — based on last_result
+    const result = (d.last_result || '').toLowerCase();
+    let pillCls = 'dim', pillText = (d.last_result || 'UNKNOWN').toUpperCase();
+    if (result === 'success')         { pillCls = 'ok'; }
+    else if (result === 'warning')    { pillCls = 'warn'; }
+    else if (result === 'failed')     { pillCls = 'err'; }
+    else if (result === 'inprogress') { pillCls = 'warn'; pillText = 'IN PROGRESS'; }
+    else if (result === 'neverran')   { pillText = 'NEVER RAN'; }
+    pill.className = 'count ' + pillCls;
+    pill.textContent = pillText;
+
+    // Time fields
+    setWbValue('wbLast',    d.last_backup_ts,  pillCls);
+    setWbValue('wbSuccess', d.last_success_ts, d.last_success_ts ? 'ok' : 'dim');
+    setWbValue('wbNext',    d.next_backup_ts,  'dim');
+
+    document.getElementById('wbLastDate').textContent    = d.last_backup_ts  ? formatDateTimeFull(d.last_backup_ts)  : '';
+    document.getElementById('wbSuccessDate').textContent = d.last_success_ts ? formatDateTimeFull(d.last_success_ts) : '';
+    document.getElementById('wbNextDate').textContent    = d.next_backup_ts  ? formatDateTimeFull(d.next_backup_ts)  : '';
+
+    const versionsEl = document.getElementById('wbVersions');
+    versionsEl.textContent = (d.versions != null) ? d.versions : '—';
+    versionsEl.className = 'wb-value ' + ((d.versions || 0) > 0 ? '' : 'dim');
+    document.getElementById('wbTarget').textContent = d.target_label || '';
+}
+
+function setWbValue(id, ts, level) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.className = 'wb-value ' + (level || '');
+    el.textContent = ts ? formatRelativeTime(ts) : '—';
+}
+
+function bindWbRefresh() {
+    const btn = document.getElementById('wbRefresh');
+    if (!btn || btn.dataset.bound) return;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', () => {
+        btn.disabled = true;
+        const prev = btn.textContent;
+        btn.textContent = '↻ scanning…';
+        fetch('/api/windowsbackup/refresh', { method: 'POST' })
+            .then(r => r.json())
+            .then(() => fetchWindowsBackup())
             .finally(() => {
                 btn.disabled = false;
                 btn.textContent = prev;

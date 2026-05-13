@@ -811,6 +811,47 @@ main {
     font-family: 'JetBrains Mono', Consolas, monospace;
 }
 
+/* ── Windows Backup card ──────────────────────────────────────────────── */
+
+.wb-card { padding: 14px 16px; }
+
+.wb-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 14px 18px;
+}
+
+.wb-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.wb-value {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.1px;
+}
+
+.wb-value.ok   { color: var(--green); }
+.wb-value.warn { color: var(--amber); }
+.wb-value.err  { color: var(--red); }
+.wb-value.dim  { color: var(--text-3); }
+
+#wbStatusPill {
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-size: 10px;
+    padding: 2px 8px;
+}
+#wbStatusPill.ok    { background: var(--green-soft); color: var(--green); border-color: rgba(61, 220, 151, 0.3); }
+#wbStatusPill.warn  { background: var(--amber-soft); color: var(--amber); border-color: rgba(245, 177, 74, 0.3); }
+#wbStatusPill.err   { background: var(--red-soft);   color: var(--red);   border-color: rgba(255, 107, 107, 0.3); }
+#wbStatusPill.dim   { background: var(--bg-elev-2);  color: var(--text-3); }
+
 /* ── VM IP chip ──────────────────────────────────────────────────────── */
 
 .vm-ip {
