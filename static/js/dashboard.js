@@ -85,13 +85,17 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchSystemInfo();
     fetchSystemEvents();
     fetchBandwidth();
+    fetchSecurityForReboot();
+    fetchVeeam();
     refreshCharts();
 
     setInterval(fetchLiveData, 5000);
     setInterval(fetchAlerts, 10000);
     setInterval(fetchSystemInfo, 30000);
     setInterval(fetchSystemEvents, 60000);
-    setInterval(fetchBandwidth, 300000);  // 5 minutes — slow-moving
+    setInterval(fetchBandwidth, 300000);
+    setInterval(fetchSecurityForReboot, 60000);   // refresh banner periodically
+    setInterval(fetchVeeam, 300000);              // 5 min — Veeam status moves slowly
     setInterval(refreshCharts, 60000);
 });
 
@@ -323,6 +327,20 @@ function fetchUpdateInfo() {
                 (d.date ? ' · ' + new Date(d.date).toLocaleString() : '');
         })
         .catch(() => {});
+
+    fetchAutoUpdateStatus();
+}
+
+function fetchAutoUpdateStatus() {
+    fetch('/api/autoupdate/status')
+        .then(r => r.json())
+        .then(d => {
+            const toggle = document.getElementById('autoUpdateToggle');
+            if (!toggle) return;
+            toggle.checked = !!d.enabled;
+            setAutoUpdateStatus(d.enabled ? 'Auto-update enabled.' : 'Auto-update disabled.', d.enabled ? 'ok' : 'warn');
+        })
+        .catch(() => {});
 }
 
 function bindUpdateHandlers() {
@@ -330,6 +348,39 @@ function bindUpdateHandlers() {
     updateBound = true;
     document.getElementById('updateCheckBtn').addEventListener('click', updateCheck);
     document.getElementById('updateApplyBtn').addEventListener('click', updateApply);
+    const toggle = document.getElementById('autoUpdateToggle');
+    if (toggle) toggle.addEventListener('change', onAutoUpdateToggle);
+}
+
+function onAutoUpdateToggle(e) {
+    const toggle = e.target;
+    const wantOn = toggle.checked;
+    toggle.disabled = true;
+    setAutoUpdateStatus(wantOn ? 'Enabling…' : 'Disabling…', 'warn');
+    fetch(wantOn ? '/api/autoupdate/enable' : '/api/autoupdate/disable', { method: 'POST' })
+        .then(r => r.json())
+        .then(d => {
+            toggle.disabled = false;
+            if (!d.ok) {
+                toggle.checked = !wantOn; // revert
+                setAutoUpdateStatus('Failed: ' + (d.error || 'unknown'), 'err');
+                return;
+            }
+            toggle.checked = !!d.enabled;
+            setAutoUpdateStatus(d.enabled ? 'Auto-update enabled.' : 'Auto-update disabled.', d.enabled ? 'ok' : 'warn');
+        })
+        .catch(() => {
+            toggle.disabled = false;
+            toggle.checked = !wantOn;
+            setAutoUpdateStatus('Failed to update setting.', 'err');
+        });
+}
+
+function setAutoUpdateStatus(msg, level) {
+    const el = document.getElementById('autoUpdateStatus');
+    if (!el) return;
+    el.textContent = msg;
+    el.className = 'settings-status ' + (level || '');
 }
 
 function updateCheck() {
@@ -452,6 +503,81 @@ function setUpdateStatus(msg, level) {
 
 
 // ── Alert History ───────────────────────────────────────────────────────────
+
+// ── Pending Reboot banner ───────────────────────────────────────────────────
+
+function fetchSecurityForReboot() {
+    fetch('/api/security/status')
+        .then(r => r.json())
+        .then(d => {
+            const banner = document.getElementById('rebootBanner');
+            if (!banner) return;
+            if (d && d.pending_reboot) {
+                banner.style.display = 'flex';
+                document.getElementById('rebootDetail').textContent =
+                    (d.reboot_reasons || 'unknown') + ' — reboot the host to apply pending changes.';
+            } else {
+                banner.style.display = 'none';
+            }
+        })
+        .catch(() => {});
+}
+
+
+// ── Veeam Backups ───────────────────────────────────────────────────────────
+
+function fetchVeeam() {
+    fetch('/api/veeam/backups')
+        .then(r => r.json())
+        .then(d => renderVeeam(d))
+        .catch(() => {});
+}
+
+function renderVeeam(d) {
+    const section = document.getElementById('veeamSection');
+    if (!section) return;
+    if (!d || !d.jobs || d.jobs.length === 0) {
+        section.style.display = 'none';
+        return;
+    }
+    section.style.display = 'block';
+
+    document.getElementById('veeamCount').textContent = d.total;
+
+    const c = d.counts || {};
+    const pills = [];
+    const order = ['success', 'warning', 'failed', 'running', 'never'];
+    const labels = { success: 'Success', warning: 'Warning', failed: 'Failed', running: 'Running', never: 'Never Ran' };
+    for (const k of order) {
+        if ((c[k] || 0) > 0) {
+            pills.push(`<span class="veeam-summary-pill ${k}"><span class="dot"></span>${c[k]} ${labels[k]}</span>`);
+        }
+    }
+    document.getElementById('veeamSummary').innerHTML = pills.join('');
+
+    const list = document.getElementById('veeamJobs');
+    list.innerHTML = d.jobs.map(j => {
+        const result = (j.last_result || 'never').toLowerCase();
+        const cls = ['success', 'warning', 'failed', 'running'].includes(result) ? result : 'never';
+        const label = (j.last_result && j.last_result !== 'None' && j.last_result !== 'NeverRan')
+            ? j.last_result.toUpperCase()
+            : 'NEVER RAN';
+        const when = j.last_end_ts ? formatRelativeTime(j.last_end_ts) : '—';
+        const dur  = j.duration_sec ? formatDuration(j.duration_sec) : '—';
+        return `
+            <div class="veeam-job">
+                <span class="veeam-job-name">
+                    ${escapeHtml(j.job_name)}
+                    ${j.job_type ? `<span class="veeam-type">${escapeHtml(j.job_type)}</span>` : ''}
+                </span>
+                <span class="veeam-job-result ${cls}">${label}</span>
+                <span class="veeam-job-when" title="${j.last_end_ts ? new Date(j.last_end_ts * 1000).toLocaleString() : ''}">${when}</span>
+                <span class="veeam-job-dur">${dur}</span>
+            </div>
+        `;
+    }).join('');
+}
+
 
 // ── Bandwidth (30-day VM traffic) ───────────────────────────────────────────
 
@@ -1078,7 +1204,10 @@ function createVmCard(vm) {
     card.id = 'vm-' + cssId(vm.vm_name);
     card.innerHTML = `
         <div class="vm-header">
-            <span class="vm-name">${escapeHtml(vm.vm_name)}</span>
+            <div class="vm-header-left">
+                <span class="vm-name">${escapeHtml(vm.vm_name)}</span>
+                <span class="vm-ip-wrap" data-field="ips"></span>
+            </div>
             <span class="vm-state" data-field="state"></span>
         </div>
         <div class="vm-metrics">
@@ -1146,8 +1275,36 @@ function updateVmCard(card, vm) {
     const shortHb = hb.replace('OkApplications', '').replace('Ok', 'OK');
     hbEl.textContent = shortHb;
     hbEl.className = 'vm-metric-value';
-    if (hb.includes('Ok') || hb === 'N/A') hbEl.classList.add('text-green');
-    else hbEl.classList.add('text-red');
+    // Heartbeat states explained:
+    //   OkApplicationsHealthy/Unknown -> green   (integration services healthy)
+    //   N/A                            -> dim    (VM not running)
+    //   NoContact/Disabled/LostComm    -> amber  (ISs not running in guest)
+    //   anything else                  -> red    (real problem)
+    if (hb === 'N/A')                                    hbEl.classList.add('text-dim');
+    else if (hb.includes('Ok'))                          hbEl.classList.add('text-green');
+    else if (/^(NoContact|Disabled|LostComm|NoIntegration)/i.test(hb)) hbEl.classList.add('text-orange');
+    else                                                  hbEl.classList.add('text-red');
+
+    // IPs (internal addresses from Hyper-V integration services)
+    const ipWrap = card.querySelector('[data-field="ips"]');
+    if (ipWrap) {
+        ipWrap.innerHTML = '';
+        const ips = (vm.ip_addresses || '').split(',').map(s => s.trim()).filter(Boolean);
+        const shown = ips.slice(0, 2);
+        for (const ip of shown) {
+            const chip = document.createElement('span');
+            chip.className = 'vm-ip';
+            chip.textContent = ip;
+            ipWrap.appendChild(chip);
+        }
+        if (ips.length > shown.length) {
+            const more = document.createElement('span');
+            more.className = 'vm-ip-more';
+            more.textContent = `+${ips.length - shown.length}`;
+            more.title = ips.slice(shown.length).join(', ');
+            ipWrap.appendChild(more);
+        }
+    }
 
     const uptimeSec = vm.uptime_sec || 0;
     card.querySelector('[data-field="uptime"]').textContent = formatUptime(uptimeSec);

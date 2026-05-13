@@ -107,6 +107,43 @@ def evaluate_alerts(conn, ts):
     _check_vm_cpu(conn, ts, s)
     _check_vm_mem(conn, ts, s)
     _check_vm_heartbeat(conn, ts)
+    _check_pending_reboot(conn, ts)
+    _check_veeam_backups(conn, ts)
+
+
+def _check_pending_reboot(conn, ts):
+    row = conn.execute(
+        "SELECT pending_reboot, reboot_reasons FROM security_status WHERE id=1"
+    ).fetchone()
+    if not row:
+        return
+    if row["pending_reboot"]:
+        reasons = row["reboot_reasons"] or "unknown"
+        _raise_alert(conn, ts, "warning", "host", "pending_reboot",
+                      f"Host has a pending reboot ({reasons})", 1)
+    else:
+        _clear_alert(conn, ts, "host", "pending_reboot")
+
+
+def _check_veeam_backups(conn, ts):
+    """Raise an alert for any backup job whose last result is Failed."""
+    rows = conn.execute(
+        "SELECT job_name, last_result, last_end_ts FROM veeam_backups"
+    ).fetchall()
+    seen_jobs = set()
+    for r in rows:
+        job = r["job_name"]
+        seen_jobs.add(job)
+        target = "veeam:" + job
+        result = (r["last_result"] or "").lower()
+        if result == "failed":
+            _raise_alert(conn, ts, "critical", target, "backup",
+                          f"Veeam job '{job}' failed", 0)
+        elif result == "warning":
+            _raise_alert(conn, ts, "warning", target, "backup",
+                          f"Veeam job '{job}' completed with warnings", 0)
+        else:
+            _clear_alert(conn, ts, target, "backup")
 
 
 def _raise_alert(conn, ts, severity, target, metric, message, value):

@@ -64,9 +64,15 @@ def init_db(db_path=None):
             net_sent_bps    REAL,
             net_recv_bps    REAL,
             disk_read_bps   REAL,
-            disk_write_bps  REAL
+            disk_write_bps  REAL,
+            ip_addresses    TEXT
         )
     """)
+    # Idempotent column add for upgrades from older versions
+    try:
+        c.execute("ALTER TABLE vm_metrics ADD COLUMN ip_addresses TEXT")
+    except sqlite3.OperationalError:
+        pass
     c.execute("CREATE INDEX IF NOT EXISTS idx_vm_ts ON vm_metrics(ts)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_vm_name_ts ON vm_metrics(vm_name, ts)")
 
@@ -197,10 +203,17 @@ def init_db(db_path=None):
             failed_logins_24h           INTEGER,
             rdp_success_24h             INTEGER,
             admin_count                 INTEGER,
+            pending_reboot              INTEGER,
+            reboot_reasons              TEXT,
             findings_json               TEXT
         )
     """)
     c.execute("INSERT OR IGNORE INTO security_status (id) VALUES (1)")
+    for col, decl in (("pending_reboot", "INTEGER"), ("reboot_reasons", "TEXT")):
+        try:
+            c.execute(f"ALTER TABLE security_status ADD COLUMN {col} {decl}")
+        except sqlite3.OperationalError:
+            pass
 
     c.execute("""
         CREATE TABLE IF NOT EXISTS rdp_logins (
@@ -222,6 +235,20 @@ def init_db(db_path=None):
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL,
             updated_ts REAL
+        )
+    """)
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS veeam_backups (
+            job_name        TEXT PRIMARY KEY,
+            job_type        TEXT,
+            last_result     TEXT,    -- 'Success', 'Warning', 'Failed', 'None', 'Running'
+            last_state      TEXT,    -- 'Stopped', 'Working', etc.
+            last_start_ts   REAL,
+            last_end_ts     REAL,
+            duration_sec    REAL,
+            schedule_enabled INTEGER,
+            seen_ts         REAL NOT NULL
         )
     """)
 

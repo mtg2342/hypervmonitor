@@ -71,10 +71,31 @@
             </div>
         </section>
 
+        <!-- Pending Reboot Banner -->
+        <section class="reboot-banner" id="rebootBanner" style="display:none;">
+            <div class="reboot-icon">↻</div>
+            <div class="reboot-body">
+                <div class="reboot-title">System has a pending reboot</div>
+                <div class="reboot-detail" id="rebootDetail">—</div>
+            </div>
+        </section>
+
         <!-- Alerts -->
         <section class="alerts-banner" id="alertsBanner" style="display:none;">
             <div class="alerts-header">Active Alerts</div>
             <div id="alertsList"></div>
+        </section>
+
+        <!-- Veeam Backups -->
+        <section id="veeamSection" style="display:none;">
+            <div class="section-title">
+                Veeam Backups
+                <span class="count" id="veeamCount">0</span>
+            </div>
+            <section class="card veeam-card">
+                <div class="veeam-summary" id="veeamSummary"></div>
+                <div class="veeam-jobs" id="veeamJobs"></div>
+            </section>
         </section>
 
         <!-- VM Bandwidth (Last 30 Days) -->
@@ -432,6 +453,18 @@
                     <button class="btn-secondary" id="updateCheckBtn">Check for Updates</button>
                     <button class="btn-primary" id="updateApplyBtn" style="display:none;">Apply Update</button>
                 </div>
+            </div>
+
+            <div class="auto-update-row">
+                <label class="toggle">
+                    <input type="checkbox" id="autoUpdateToggle">
+                    <span class="toggle-slider"></span>
+                </label>
+                <div class="auto-update-text">
+                    <div class="auto-update-title">Daily auto-update</div>
+                    <div class="auto-update-detail">Pulls and applies new commits from GitHub every night at 3:30 AM as SYSTEM. Your collected history and settings are preserved.</div>
+                </div>
+                <span class="settings-status" id="autoUpdateStatus"></span>
             </div>
 
             <div class="update-status" id="updateStatus"></div>

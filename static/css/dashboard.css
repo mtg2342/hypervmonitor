@@ -567,6 +567,255 @@ main {
     color: var(--text-3);
 }
 
+/* ── Pending Reboot banner ───────────────────────────────────────────── */
+
+.reboot-banner {
+    background: linear-gradient(180deg, var(--amber-soft) 0%, transparent 100%);
+    border: 1px solid rgba(245, 177, 74, 0.4);
+    border-radius: var(--radius);
+    padding: 14px 18px;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.reboot-icon {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: var(--amber);
+    color: #0a0e15;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    font-weight: 700;
+    flex-shrink: 0;
+    animation: pulse 2s infinite;
+}
+
+.reboot-title {
+    color: var(--amber);
+    font-weight: 700;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.reboot-detail {
+    color: var(--text-2);
+    font-size: 12px;
+    margin-top: 2px;
+}
+
+/* ── Veeam Backups ───────────────────────────────────────────────────── */
+
+.veeam-card { padding: 14px 16px; }
+
+.veeam-summary {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border-soft);
+    flex-wrap: wrap;
+}
+
+.veeam-summary-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    border-radius: 12px;
+    background: var(--bg-elev-2);
+    border: 1px solid var(--border);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-2);
+}
+
+.veeam-summary-pill .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}
+
+.veeam-summary-pill.success { color: var(--green); }
+.veeam-summary-pill.success .dot { background: var(--green); }
+.veeam-summary-pill.warning { color: var(--amber); }
+.veeam-summary-pill.warning .dot { background: var(--amber); }
+.veeam-summary-pill.failed  { color: var(--red); }
+.veeam-summary-pill.failed .dot { background: var(--red); }
+.veeam-summary-pill.never   { color: var(--text-3); }
+.veeam-summary-pill.never .dot { background: var(--text-3); }
+.veeam-summary-pill.running { color: var(--accent); }
+.veeam-summary-pill.running .dot { background: var(--accent); animation: pulse 2s infinite; }
+
+.veeam-jobs { display: flex; flex-direction: column; gap: 6px; }
+
+.veeam-job {
+    display: grid;
+    grid-template-columns: 1fr auto auto auto;
+    gap: 14px;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px dashed var(--border-soft);
+    font-size: 12px;
+}
+
+.veeam-job:last-child { border-bottom: none; }
+
+.veeam-job-name {
+    color: var(--text);
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.veeam-job-name .veeam-type {
+    color: var(--text-3);
+    font-weight: 500;
+    margin-left: 8px;
+    font-size: 11px;
+}
+
+.veeam-job-result {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 3px 8px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.veeam-job-result::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+}
+
+.veeam-job-result.success { background: var(--green-soft); color: var(--green); }
+.veeam-job-result.success::before { background: var(--green); }
+.veeam-job-result.warning { background: var(--amber-soft); color: var(--amber); }
+.veeam-job-result.warning::before { background: var(--amber); }
+.veeam-job-result.failed  { background: var(--red-soft); color: var(--red); }
+.veeam-job-result.failed::before  { background: var(--red); }
+.veeam-job-result.never   { background: var(--bg-elev-2); color: var(--text-3); }
+.veeam-job-result.never::before   { background: var(--text-3); }
+.veeam-job-result.running { background: var(--accent-soft); color: var(--accent); }
+.veeam-job-result.running::before { background: var(--accent); animation: pulse 2s infinite; }
+
+.veeam-job-when, .veeam-job-dur {
+    color: var(--text-3);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+/* ── VM IP chip ──────────────────────────────────────────────────────── */
+
+.vm-ip {
+    font-size: 10px;
+    color: var(--text-3);
+    font-family: 'JetBrains Mono', Consolas, monospace;
+    font-weight: 500;
+    background: var(--bg);
+    border: 1px solid var(--border-soft);
+    padding: 2px 7px;
+    border-radius: 10px;
+    margin-left: 6px;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.2px;
+}
+
+.vm-ip-more {
+    color: var(--text-3);
+    margin-left: 4px;
+    font-size: 10px;
+}
+
+/* ── Toggle switch (auto-update setting) ─────────────────────────────── */
+
+.auto-update-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-soft);
+}
+
+.auto-update-text { flex: 1; }
+
+.auto-update-title {
+    color: var(--text);
+    font-weight: 600;
+    font-size: 13px;
+}
+
+.auto-update-detail {
+    color: var(--text-3);
+    font-size: 11px;
+    margin-top: 2px;
+    line-height: 1.5;
+    max-width: 580px;
+}
+
+.toggle {
+    position: relative;
+    display: inline-block;
+    width: 38px;
+    height: 22px;
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+.toggle input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: var(--bg-elev-2);
+    border: 1px solid var(--border);
+    transition: 0.2s;
+    border-radius: 22px;
+}
+
+.toggle-slider::before {
+    content: '';
+    position: absolute;
+    height: 16px;
+    width: 16px;
+    left: 2px;
+    bottom: 2px;
+    background: var(--text-2);
+    transition: 0.2s;
+    border-radius: 50%;
+}
+
+.toggle input:checked + .toggle-slider {
+    background: var(--accent);
+    border-color: var(--accent);
+}
+
+.toggle input:checked + .toggle-slider::before {
+    transform: translateX(16px);
+    background: #fff;
+}
+
+.toggle input:disabled + .toggle-slider { opacity: 0.4; cursor: not-allowed; }
+
 /* ── Bandwidth card (dashboard) ──────────────────────────────────────── */
 
 .bandwidth-card { padding: 16px 18px; }
@@ -678,6 +927,21 @@ main {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.vm-header-left {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    flex: 1;
+}
+
+.vm-ip-wrap {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+    min-width: 0;
 }
 
 .vm-state {

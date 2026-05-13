@@ -177,6 +177,102 @@ def vms_history():
     return jsonify(_query_vms_history(range_key, vm_name))
 
 
+@app.route("/api/veeam/backups")
+def veeam_backups():
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """SELECT job_name, job_type, last_result, last_state, last_start_ts,
+                      last_end_ts, duration_sec, schedule_enabled, seen_ts
+               FROM veeam_backups
+               ORDER BY COALESCE(last_end_ts, 0) DESC, job_name"""
+        ).fetchall()
+        jobs = _rows_to_dicts(rows)
+
+        # Summary counts for the dashboard badge
+        counts = {"success": 0, "warning": 0, "failed": 0, "never": 0, "running": 0, "other": 0}
+        for j in jobs:
+            r = (j.get("last_result") or "").lower()
+            if   r == "success": counts["success"] += 1
+            elif r == "warning": counts["warning"] += 1
+            elif r == "failed":  counts["failed"]  += 1
+            elif r == "running": counts["running"] += 1
+            elif r in ("none", "neverran", ""): counts["never"] += 1
+            else:                 counts["other"]   += 1
+
+        return jsonify({"jobs": jobs, "counts": counts, "total": len(jobs)})
+    finally:
+        conn.close()
+
+
+# ── Auto-update toggle ────────────────────────────────────────────────────────
+
+AUTO_UPDATE_TASK = "HyperVMonitorAutoUpdate"
+
+
+def _auto_update_task_exists():
+    try:
+        r = subprocess.run(
+            ["schtasks.exe", "/Query", "/TN", AUTO_UPDATE_TASK],
+            capture_output=True, text=True, timeout=10,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+@app.route("/api/autoupdate/status")
+def autoupdate_status():
+    return jsonify({"enabled": _auto_update_task_exists(), "task": AUTO_UPDATE_TASK})
+
+
+@app.route("/api/autoupdate/enable", methods=["POST"])
+def autoupdate_enable():
+    """Create the daily 3:30 AM Task Scheduler entry that re-runs deploy.ps1."""
+    if _auto_update_task_exists():
+        return jsonify({"ok": True, "enabled": True, "message": "Already enabled."})
+    ps_cmd = (
+        f"$env:HVM_AUTO=1; iex (irm '{RAW_DEPLOY}')"
+    )
+    script = (
+        "$action = New-ScheduledTaskAction -Execute 'powershell.exe' "
+        f"-Argument '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command \"{ps_cmd}\"'; "
+        "$trigger = New-ScheduledTaskTrigger -Daily -At 3:30am; "
+        "$principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest; "
+        "$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries "
+        "-StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 30); "
+        f"Register-ScheduledTask -TaskName '{AUTO_UPDATE_TASK}' -Action $action -Trigger $trigger "
+        "-Principal $principal -Settings $settings -Force | Out-Null; "
+        "'ok'"
+    )
+    try:
+        r = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, text=True, timeout=30,
+        )
+        if r.returncode != 0:
+            return jsonify({"ok": False, "error": (r.stderr or "schtask register failed")[:500]})
+        return jsonify({"ok": True, "enabled": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+
+
+@app.route("/api/autoupdate/disable", methods=["POST"])
+def autoupdate_disable():
+    if not _auto_update_task_exists():
+        return jsonify({"ok": True, "enabled": False, "message": "Already disabled."})
+    try:
+        r = subprocess.run(
+            ["schtasks.exe", "/Delete", "/TN", AUTO_UPDATE_TASK, "/F"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if r.returncode != 0:
+            return jsonify({"ok": False, "error": (r.stderr or "schtask delete failed")[:500]})
+        return jsonify({"ok": True, "enabled": False})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+
+
 @app.route("/api/vms/bandwidth")
 def vms_bandwidth():
     """Per-VM network traffic totals over the last N days.

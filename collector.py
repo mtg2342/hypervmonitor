@@ -7,7 +7,7 @@ from db import get_connection, purge_old_data, rollup_aggregates
 from config import (
     POLL_INTERVAL, VHD_POLL_MULTIPLE, PURGE_CHECK_MULTIPLE,
     SYSINFO_POLL_MULTIPLE, EVENTLOG_POLL_MULTIPLE, UPDATES_POLL_MULTIPLE,
-    ROLLUP_POLL_MULTIPLE, SECURITY_POLL_MULTIPLE,
+    ROLLUP_POLL_MULTIPLE, SECURITY_POLL_MULTIPLE, VEEAM_POLL_MULTIPLE,
     RDP_LOOKBACK_DAYS, RDP_MAX_EVENTS,
     EVENTLOG_LOOKBACK_HOURS, EVENTLOG_MAX_EVENTS,
 )
@@ -103,6 +103,8 @@ class MetricCollector:
             if self._poll_count == 1 or self._poll_count % SECURITY_POLL_MULTIPLE == 0:
                 self._collect_security(conn, ts)
                 self._collect_rdp_logins(conn, ts)
+            if self._poll_count == 1 or self._poll_count % VEEAM_POLL_MULTIPLE == 0:
+                self._collect_veeam(conn, ts)
             if self._poll_count % VHD_POLL_MULTIPLE == 0:
                 self._collect_vhd(conn, ts)
             if self._poll_count == 1 or self._poll_count % UPDATES_POLL_MULTIPLE == 0:
@@ -117,19 +119,42 @@ class MetricCollector:
         logger.debug("Poll #%d completed in %.1fs", self._poll_count, time.time() - ts)
 
     def _collect_vm_and_network(self, conn, ts):
-        # Step 1: VM basic info via Get-VM. Heartbeat is wrapped in try/catch
-        # because $_.Heartbeat can throw for VMs without integration services.
+        # Step 1: VM basic info via Get-VM.
+        # - State is converted to string explicitly with "$($_.State)" because the
+        #   raw enum value can break the string comparison on some Hyper-V versions.
+        # - Heartbeat is wrapped in try/catch because $_.Heartbeat can throw for
+        #   VMs without integration services; we capture as a real string.
+        # - IPs come from Get-VMNetworkAdapter | Select IPAddresses, joined IPv4-only.
         script_vm = (
-            "Get-VM | Select-Object Name, State, CPUUsage, MemoryAssigned, MemoryDemand, "
+            "Get-VM | Select-Object Name, "
+            "@{N='StateStr';E={\"$($_.State)\"}}, "
+            "CPUUsage, MemoryAssigned, MemoryDemand, "
             "@{N='UptimeSec';E={try{if($_.Uptime){$_.Uptime.TotalSeconds}else{0}}catch{0}}}, "
             "@{N='Heartbeat';E={"
             "try{"
-            "  if ($_.State -ne 'Running') {'N/A'}"
+            "  $stateName = \"$($_.State)\"; "
+            "  if ($stateName -ne 'Running') { 'N/A' } "
             "  else { "
             "    $h = $_.Heartbeat; "
-            "    if ($h -ne $null) { $h.ToString() } else { 'NoIntegration' }"
-            "  }"
-            "} catch { 'Unknown' }"
+            "    if ($h -ne $null -and \"$h\" -ne '') { \"$h\" } else { 'NoContact' } "
+            "  } "
+            "} catch { 'Unknown' } "
+            "}}, "
+            "@{N='IPs';E={"
+            "try{"
+            "  $stateName = \"$($_.State)\"; "
+            "  if ($stateName -ne 'Running') { '' } "
+            "  else { "
+            "    $vm = $_; "
+            "    $ips = @(); "
+            "    foreach ($a in (Get-VMNetworkAdapter -VM $vm -ErrorAction SilentlyContinue)) { "
+            "      foreach ($ip in $a.IPAddresses) { "
+            "        if ($ip -and $ip -notmatch ':' -and $ip -ne '169.254.0.0') { $ips += $ip } "
+            "      } "
+            "    } "
+            "    ($ips | Select-Object -Unique) -join ',' "
+            "  } "
+            "} catch { '' } "
             "}} | ConvertTo-Json -Compress -Depth 3"
         )
         vms = _ensure_list(ps_json(script_vm))
@@ -143,12 +168,7 @@ class MetricCollector:
             if not isinstance(vm, dict) or not vm.get("Name"):
                 continue
             name = vm["Name"]
-            state_val = vm.get("State")
-            if isinstance(state_val, int):
-                state_map = {2: "Running", 3: "Off", 6: "Saved", 9: "Paused"}
-                state = state_map.get(state_val, str(state_val))
-            else:
-                state = str(state_val) if state_val else "Unknown"
+            state = vm.get("StateStr") or "Unknown"
 
             vm_data[name] = {
                 "state": state,
@@ -157,6 +177,7 @@ class MetricCollector:
                 "mem_demand":     vm.get("MemoryDemand"),
                 "uptime_sec":     vm.get("UptimeSec"),
                 "heartbeat":      vm.get("Heartbeat"),
+                "ip_addresses":   vm.get("IPs") or "",
                 "net_sent_bps":   0.0,
                 "net_recv_bps":   0.0,
                 "disk_read_bps":  0.0,
@@ -202,8 +223,8 @@ class MetricCollector:
                 """INSERT INTO vm_metrics
                    (ts, vm_name, state, cpu_usage, mem_assigned, mem_demand,
                     uptime_sec, heartbeat, net_sent_bps, net_recv_bps,
-                    disk_read_bps, disk_write_bps)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    disk_read_bps, disk_write_bps, ip_addresses)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     ts, name, d["state"],
                     d["cpu_usage"], d["mem_assigned"], d["mem_demand"],
@@ -212,6 +233,7 @@ class MetricCollector:
                     d["net_recv_bps"] or None,
                     d["disk_read_bps"] or None,
                     d["disk_write_bps"] or None,
+                    d["ip_addresses"] or None,
                 ),
             )
 
@@ -527,6 +549,18 @@ class MetricCollector:
             "          Where-Object { $_.Properties[8].Value -eq 10 }); "
             "  $result['RdpSuccess24h'] = $rdp.Count; "
             "} catch { $result['RdpSuccess24h'] = -1 }; "
+            "try { "
+            "  $reasons = @(); "
+            "  if (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\RebootPending') { $reasons += 'Component Based Servicing' }; "
+            "  if (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update\\RebootRequired') { $reasons += 'Windows Update' }; "
+            "  if (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Updates\\UpdateExeVolatile') { $reasons += 'Update exec volatile' }; "
+            "  $pfr = (Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager' -Name PendingFileRenameOperations -ErrorAction SilentlyContinue).PendingFileRenameOperations; "
+            "  if ($pfr) { $reasons += 'Pending file rename' }; "
+            "  $cv = (Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\Netlogon\\JoinDomain' -ErrorAction SilentlyContinue); "
+            "  if ($cv) { $reasons += 'Domain join' }; "
+            "  $result['PendingReboot'] = [int]($reasons.Count -gt 0); "
+            "  $result['RebootReasons'] = ($reasons -join ', '); "
+            "} catch { $result['PendingReboot'] = 0; $result['RebootReasons'] = '' }; "
             "$result | ConvertTo-Json -Compress -Depth 3"
         )
         data = ps_json(script, timeout=45)
@@ -547,6 +581,8 @@ class MetricCollector:
         admin_count      = data.get("AdminCount", -1)
         failed_24h       = data.get("FailedLogins24h", -1)
         rdp_24h          = data.get("RdpSuccess24h", -1)
+        pending_reboot   = data.get("PendingReboot", 0)
+        reboot_reasons   = data.get("RebootReasons", "")
 
         findings = self._evaluate_security_findings(data)
         findings_json = json.dumps(findings)
@@ -559,6 +595,7 @@ class MetricCollector:
                 defender_signature_age_days=?, defender_engine_version=?,
                 bitlocker_status=?, uac_enabled=?,
                 failed_logins_24h=?, rdp_success_24h=?, admin_count=?,
+                pending_reboot=?, reboot_reasons=?,
                 findings_json=?
                WHERE id=1""",
             (
@@ -570,6 +607,7 @@ class MetricCollector:
                 failed_24h if failed_24h != -1 else None,
                 rdp_24h if rdp_24h != -1 else None,
                 admin_count if admin_count != -1 else None,
+                int(pending_reboot or 0), reboot_reasons or "",
                 findings_json,
             ),
         )
@@ -644,6 +682,14 @@ class MetricCollector:
                     "detail": "Worth a quick look — review event ID 4625 in the Security log.",
                 })
 
+        if data.get("PendingReboot"):
+            findings.append({
+                "severity": "medium",
+                "title": "System has a pending reboot",
+                "detail": "Reason: " + (data.get("RebootReasons") or "unknown") +
+                          ". Until you reboot, some updates and security patches are not active.",
+            })
+
         if not findings:
             findings.append({
                 "severity": "ok",
@@ -709,3 +755,99 @@ class MetricCollector:
                 logger.exception("Failed to insert RDP login event")
         if inserted:
             logger.info("Collected %d new RDP login events", inserted)
+
+    # ── Veeam Backup & Replication ───────────────────────────────────────────
+
+    def _collect_veeam(self, conn, ts):
+        """Scan Veeam B&R job history. No-op if Veeam isn't installed."""
+        # Try loading the Veeam PowerShell module by name; fall back to the
+        # default installation path; fall back to the legacy PSSnapin.
+        script = (
+            "$loaded = $false; "
+            "try { Import-Module Veeam.Backup.PowerShell -ErrorAction Stop; $loaded = $true } catch {}; "
+            "if (-not $loaded) { "
+            "  try { Import-Module 'C:\\Program Files\\Veeam\\Backup and Replication\\Console\\Veeam.Backup.PowerShell\\Veeam.Backup.PowerShell.psd1' -ErrorAction Stop; $loaded = $true } catch {} "
+            "}; "
+            "if (-not $loaded) { "
+            "  try { Add-PSSnapin VeeamPSSnapIn -ErrorAction Stop; $loaded = $true } catch {} "
+            "}; "
+            "if (-not $loaded) { Write-Output '[]'; exit }; "
+            "try { "
+            "  $jobs = @(Get-VBRJob -ErrorAction SilentlyContinue); "
+            "  $cdpJobs = @(); "
+            "  try { $cdpJobs = @(Get-VBRComputerBackupJob -ErrorAction SilentlyContinue) } catch {}; "
+            "  $allJobs = $jobs + $cdpJobs; "
+            "  $out = @(); "
+            "  foreach ($j in $allJobs) { "
+            "    if (-not $j) { continue }; "
+            "    $name = if ($j.Name) { $j.Name } else { 'unnamed' }; "
+            "    $type = if ($j.JobType) { \"$($j.JobType)\" } elseif ($j.Type) { \"$($j.Type)\" } else { '' }; "
+            "    $enabled = $true; "
+            "    try { if ($j.PSObject.Properties.Match('ScheduleEnabled')) { $enabled = [bool]$j.ScheduleEnabled } } catch {}; "
+            "    $session = $null; "
+            "    try { $session = $j.FindLastSession() } catch {}; "
+            "    if (-not $session) { "
+            "      try { $session = (Get-VBRBackupSession -Job $j -ErrorAction SilentlyContinue | Sort-Object EndTime -Descending | Select-Object -First 1) } catch {} "
+            "    }; "
+            "    if ($session) { "
+            "      $startT = if ($session.CreationTime) { [int][DateTimeOffset]::new($session.CreationTime).ToUnixTimeSeconds() } else { 0 }; "
+            "      $endT   = if ($session.EndTime -and $session.EndTime.Year -gt 1) { [int][DateTimeOffset]::new($session.EndTime).ToUnixTimeSeconds() } else { 0 }; "
+            "      $result = if ($session.Result) { \"$($session.Result)\" } else { 'None' }; "
+            "      $state  = if ($session.State)  { \"$($session.State)\"  } else { '' }; "
+            "      $dur = if ($endT -gt 0 -and $startT -gt 0) { $endT - $startT } else { 0 }; "
+            "      $out += [PSCustomObject]@{ "
+            "        Name = $name; Type = $type; Result = $result; State = $state; "
+            "        StartTs = $startT; EndTs = $endT; DurationSec = $dur; "
+            "        ScheduleEnabled = [int]$enabled "
+            "      } "
+            "    } else { "
+            "      $out += [PSCustomObject]@{ "
+            "        Name = $name; Type = $type; Result = 'NeverRan'; State = ''; "
+            "        StartTs = 0; EndTs = 0; DurationSec = 0; "
+            "        ScheduleEnabled = [int]$enabled "
+            "      } "
+            "    } "
+            "  }; "
+            "  $out | ConvertTo-Json -Compress -Depth 4 "
+            "} catch { Write-Output '[]' }"
+        )
+        data = _ensure_list(ps_json(script, timeout=60))
+        if not data:
+            logger.debug("Veeam: no data (not installed or no jobs)")
+            return
+
+        names_seen = set()
+        for j in data:
+            if not isinstance(j, dict) or not j.get("Name"):
+                continue
+            name = j["Name"]
+            names_seen.add(name)
+            conn.execute(
+                """INSERT INTO veeam_backups
+                   (job_name, job_type, last_result, last_state, last_start_ts,
+                    last_end_ts, duration_sec, schedule_enabled, seen_ts)
+                   VALUES (?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(job_name) DO UPDATE SET
+                     job_type         = excluded.job_type,
+                     last_result      = excluded.last_result,
+                     last_state       = excluded.last_state,
+                     last_start_ts    = excluded.last_start_ts,
+                     last_end_ts      = excluded.last_end_ts,
+                     duration_sec     = excluded.duration_sec,
+                     schedule_enabled = excluded.schedule_enabled,
+                     seen_ts          = excluded.seen_ts""",
+                (
+                    name, j.get("Type", ""),
+                    j.get("Result", ""), j.get("State", ""),
+                    j.get("StartTs") or None, j.get("EndTs") or None,
+                    j.get("DurationSec") or None,
+                    int(j.get("ScheduleEnabled") or 0),
+                    ts,
+                ),
+            )
+        # Optionally clean up jobs that disappeared from Veeam more than 7 days ago
+        conn.execute(
+            "DELETE FROM veeam_backups WHERE seen_ts < ?",
+            (ts - 7 * 86400,),
+        )
+        logger.info("Veeam: %d job(s) tracked", len(names_seen))

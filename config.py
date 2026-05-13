@@ -9,6 +9,7 @@ SYSINFO_POLL_MULTIPLE = 10  # system info (uptime, OS) every 5 min
 EVENTLOG_POLL_MULTIPLE = 4  # event log scan every 2 min
 UPDATES_POLL_MULTIPLE = 120 # pending updates check every 1 hour (slow operation)
 SECURITY_POLL_MULTIPLE = 20 # security status every 10 min
+VEEAM_POLL_MULTIPLE    = 20 # Veeam backup status every 10 min
 ROLLUP_POLL_MULTIPLE = 120  # roll up hourly/daily aggregates every 1 hour
 PURGE_CHECK_MULTIPLE = 120  # run purge every N polls (120 * 30s = 1 hour)
 
