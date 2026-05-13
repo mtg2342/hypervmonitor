@@ -32,6 +32,28 @@ function Test-Command($name) {
     catch { return $false }
 }
 
+# Detects whether `python` actually runs (not the Microsoft Store stub that
+# only opens a Store page and returns "Python was not found...").
+function Test-PythonWorks {
+    if (-not (Test-Command python)) { return $false }
+    try {
+        $out = & python --version 2>&1 | Out-String
+    } catch { return $false }
+    if ($LASTEXITCODE -ne 0)        { return $false }
+    if ($out -match 'was not found') { return $false }   # MS Store stub message
+    if ($out -match '^\s*Python \d') { return $true }
+    return $false
+}
+
+# Returns $true if anonymous (no-auth) access to the repo works — i.e. it's public.
+function Test-RepoPublic {
+    try {
+        $r = Invoke-WebRequest -Uri $RAW_INSTALLER -Method Head -UseBasicParsing `
+                               -ErrorAction Stop -TimeoutSec 10
+        return ($r.StatusCode -eq 200)
+    } catch { return $false }
+}
+
 function Refresh-Path {
     $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     $user    = [Environment]::GetEnvironmentVariable('Path', 'User')
@@ -53,11 +75,23 @@ if (-not $isAdmin) {
 
 Write-Section 'Hyper-V Monitor — Installer'
 
-if ($TOKEN) {
+# If the repo is publicly accessible, ignore any leftover GH_TOKEN env var so we
+# don't embed a stale (potentially revoked) token in the clone's .git/config.
+if (Test-RepoPublic) {
+    if ($TOKEN) {
+        Write-Host 'Repo is public — ignoring GH_TOKEN and using anonymous access.' -ForegroundColor DarkGray
+        $TOKEN = $null
+        Remove-Item Env:\GH_TOKEN -ErrorAction SilentlyContinue
+    } else {
+        Write-Host 'Auth:   none (public-repo mode)' -ForegroundColor DarkGray
+    }
+} elseif ($TOKEN) {
     $masked = $TOKEN.Substring(0, [Math]::Min(12, $TOKEN.Length)) + '…(redacted)'
     Write-Host "Auth:   using GH_TOKEN ($masked)" -ForegroundColor DarkGray
 } else {
-    Write-Host 'Auth:   none (public-repo mode)' -ForegroundColor DarkGray
+    Write-Host 'Repo is not publicly accessible and no GH_TOKEN is set.' -ForegroundColor Red
+    Write-Host 'Either make the repo public, or set $env:GH_TOKEN before running this script.' -ForegroundColor Yellow
+    Read-Host 'Press Enter to exit'; return
 }
 
 # ── Prereq: Git ──────────────────────────────────────────────────────────────
@@ -81,8 +115,16 @@ if (-not (Test-Command git)) {
 Write-Host ('Git:    ' + (git --version)) -ForegroundColor Green
 
 # ── Prereq: Python ───────────────────────────────────────────────────────────
-if (-not (Test-Command python)) {
-    Write-Host 'Python is not installed.' -ForegroundColor Red
+# Note: a `python` on PATH may be the Windows App Execution Alias stub that only
+# opens the Microsoft Store. Test-PythonWorks distinguishes that from a real install.
+if (-not (Test-PythonWorks)) {
+    if (Test-Command python) {
+        Write-Host 'Detected the Windows "App Execution Alias" stub for python (it opens the Microsoft Store).' -ForegroundColor Yellow
+        Write-Host 'Will install real Python via winget. After install, you may need to disable the stub at:' -ForegroundColor Yellow
+        Write-Host '  Settings -> Apps -> Advanced app settings -> App execution aliases  (turn off both python entries)' -ForegroundColor Yellow
+    } else {
+        Write-Host 'Python is not installed.' -ForegroundColor Red
+    }
     if (Test-Command winget) {
         $r = Read-Host 'Install Python 3.12 via winget? (Y/n)'
         if ($r -ne 'n') {
@@ -93,12 +135,17 @@ if (-not (Test-Command python)) {
         Write-Host "Install Python 3.10+ from https://python.org/downloads ('Add to PATH' checked) and re-run." -ForegroundColor Yellow
         Read-Host 'Press Enter to exit'; return
     }
-    if (-not (Test-Command python)) {
-        Write-Host 'Python still not on PATH. Open a new PowerShell window and re-run.' -ForegroundColor Red
+    if (-not (Test-PythonWorks)) {
+        Write-Host '' -ForegroundColor Red
+        Write-Host 'Python is installed but still not callable as `python` from this shell.' -ForegroundColor Red
+        Write-Host 'Most common cause: the Microsoft Store app-execution-alias is shadowing real Python.' -ForegroundColor Yellow
+        Write-Host 'Fix: Settings -> Apps -> Advanced app settings -> App execution aliases -> turn OFF' -ForegroundColor Yellow
+        Write-Host '     both "App Installer python.exe" and "App Installer python3.exe", then open a NEW' -ForegroundColor Yellow
+        Write-Host '     PowerShell window and re-run the installer.' -ForegroundColor Yellow
         Read-Host 'Press Enter to exit'; return
     }
 }
-Write-Host ('Python: ' + (python --version 2>&1)) -ForegroundColor Green
+Write-Host ('Python: ' + ((& python --version 2>&1) -replace '\r?\n','')) -ForegroundColor Green
 
 # ── Install location ─────────────────────────────────────────────────────────
 Write-Host ''
