@@ -389,6 +389,39 @@
                 <button class="btn-primary" id="settingsSave" disabled>Save Changes</button>
             </div>
         </section>
+
+        <div class="section-title">Updates</div>
+        <section class="card update-card">
+            <div class="update-row">
+                <div class="update-current">
+                    <div class="sysinfo-label">Current Version</div>
+                    <div class="update-version" id="updateCurrent">—</div>
+                    <div class="update-subject text-dim" id="updateSubject">—</div>
+                    <div class="update-date text-dim" id="updateDate">—</div>
+                </div>
+                <div class="update-actions">
+                    <button class="btn-secondary" id="updateCheckBtn">Check for Updates</button>
+                    <button class="btn-primary" id="updateApplyBtn" style="display:none;">Apply Update</button>
+                </div>
+            </div>
+
+            <div class="update-status" id="updateStatus"></div>
+
+            <div class="update-changes" id="updateChanges" style="display:none;">
+                <div class="sysinfo-label">Incoming Changes</div>
+                <ul class="update-commits" id="updateCommits"></ul>
+            </div>
+
+            <div class="update-progress" id="updateProgress" style="display:none;">
+                <div class="update-progress-row">
+                    <div class="update-spinner"></div>
+                    <div class="update-progress-text">
+                        <div class="update-progress-title">Updating…</div>
+                        <div class="update-progress-detail" id="updateProgressDetail">Stopping the dashboard. The page will reload automatically when the new version is ready.</div>
+                    </div>
+                </div>
+            </div>
+        </section>
       </div><!-- /view-settings -->
     </main>
 

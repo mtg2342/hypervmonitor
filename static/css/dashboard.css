@@ -1157,6 +1157,139 @@ main {
 }
 .btn-secondary:hover { background: var(--bg-hover); color: var(--text); }
 
+/* ── Updates panel ────────────────────────────────────────────────────── */
+
+.update-card { padding: 18px 20px; }
+
+.update-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 18px;
+    flex-wrap: wrap;
+}
+
+.update-current { flex: 1; min-width: 240px; }
+
+.update-version {
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+    margin-top: 4px;
+    letter-spacing: -0.2px;
+}
+
+.update-subject {
+    font-size: 12px;
+    margin-top: 2px;
+}
+
+.update-date {
+    font-size: 11px;
+    margin-top: 2px;
+}
+
+.update-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.update-status {
+    font-size: 12px;
+    color: var(--text-2);
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-soft);
+    min-height: 18px;
+}
+.update-status.ok   { color: var(--green); }
+.update-status.err  { color: var(--red); }
+.update-status.warn { color: var(--amber); }
+
+.update-changes {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-soft);
+}
+
+.update-commits {
+    list-style: none;
+    margin-top: 6px;
+}
+
+.update-commits li {
+    display: grid;
+    grid-template-columns: 64px 1fr auto;
+    gap: 10px;
+    padding: 6px 0;
+    border-bottom: 1px dashed var(--border-soft);
+    font-size: 12px;
+    align-items: baseline;
+}
+
+.update-commits li:last-child { border-bottom: none; }
+
+.update-commits .c-hash {
+    color: var(--accent);
+    font-family: 'JetBrains Mono', 'Consolas', monospace;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.update-commits .c-subject {
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.update-commits .c-when {
+    color: var(--text-3);
+    font-size: 11px;
+}
+
+.update-progress {
+    margin-top: 12px;
+    padding: 14px;
+    background: var(--accent-soft);
+    border: 1px solid rgba(91, 157, 255, 0.3);
+    border-radius: var(--radius-sm);
+}
+
+.update-progress-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.update-spinner {
+    width: 22px;
+    height: 22px;
+    border: 2px solid rgba(91, 157, 255, 0.3);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+    flex-shrink: 0;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.update-progress-title {
+    color: var(--accent);
+    font-weight: 700;
+    font-size: 13px;
+    margin-bottom: 2px;
+}
+
+.update-progress-detail {
+    color: var(--text-2);
+    font-size: 11px;
+    line-height: 1.5;
+}
+
 /* Scrollbars (subtle) */
 
 ::-webkit-scrollbar { width: 8px; height: 8px; }

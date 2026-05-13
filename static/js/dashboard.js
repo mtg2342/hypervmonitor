@@ -123,6 +123,8 @@ function switchView(name) {
     }
     if (name === 'settings') {
         fetchSettings();
+        fetchUpdateInfo();
+        bindUpdateHandlers();
     }
 }
 
@@ -293,6 +295,157 @@ function setSettingsStatus(msg, level) {
     if (!el) return;
     el.textContent = msg;
     el.className = 'settings-status ' + (level || '');
+}
+
+
+// ── Updates ─────────────────────────────────────────────────────────────────
+
+let updateBound = false;
+let currentCommit = '';
+
+function fetchUpdateInfo() {
+    fetch('/api/update/info')
+        .then(r => r.json())
+        .then(d => {
+            if (!d.ok) {
+                document.getElementById('updateCurrent').textContent = 'Not a git checkout';
+                setUpdateStatus('This install was not deployed via deploy.ps1, so in-app updates are disabled.', 'warn');
+                document.getElementById('updateCheckBtn').disabled = true;
+                return;
+            }
+            currentCommit = d.full;
+            document.getElementById('updateCurrent').textContent = d.short;
+            document.getElementById('updateSubject').textContent = d.subject || '';
+            document.getElementById('updateDate').textContent =
+                (d.relative ? d.relative : '') +
+                (d.date ? ' · ' + new Date(d.date).toLocaleString() : '');
+        })
+        .catch(() => {});
+}
+
+function bindUpdateHandlers() {
+    if (updateBound) return;
+    updateBound = true;
+    document.getElementById('updateCheckBtn').addEventListener('click', updateCheck);
+    document.getElementById('updateApplyBtn').addEventListener('click', updateApply);
+}
+
+function updateCheck() {
+    const btn = document.getElementById('updateCheckBtn');
+    btn.disabled = true;
+    setUpdateStatus('Checking GitHub…', 'warn');
+    fetch('/api/update/check', { method: 'POST' })
+        .then(r => r.json())
+        .then(d => {
+            btn.disabled = false;
+            if (!d.ok) {
+                setUpdateStatus('Check failed: ' + (d.error || 'unknown error'), 'err');
+                return;
+            }
+            const changesBox = document.getElementById('updateChanges');
+            const applyBtn   = document.getElementById('updateApplyBtn');
+            const list = document.getElementById('updateCommits');
+            if (d.up_to_date) {
+                setUpdateStatus('You are running the latest version.', 'ok');
+                changesBox.style.display = 'none';
+                applyBtn.style.display = 'none';
+                return;
+            }
+            setUpdateStatus(
+                d.count + (d.count === 1 ? ' new commit' : ' new commits') + ' available.',
+                'warn'
+            );
+            list.innerHTML = d.commits.map(c => `
+                <li>
+                    <span class="c-hash">${escapeHtml(c.hash)}</span>
+                    <span class="c-subject">${escapeHtml(c.subject)}</span>
+                    <span class="c-when">${escapeHtml(c.relative)}</span>
+                </li>
+            `).join('');
+            changesBox.style.display = 'block';
+            applyBtn.style.display = 'inline-flex';
+        })
+        .catch(() => {
+            btn.disabled = false;
+            setUpdateStatus('Check failed.', 'err');
+        });
+}
+
+function updateApply() {
+    if (!confirm('Apply update now? The dashboard will stop for about 10–15 seconds and reload automatically.')) return;
+
+    document.getElementById('updateCheckBtn').disabled = true;
+    document.getElementById('updateApplyBtn').disabled = true;
+    setUpdateStatus('', '');
+    document.getElementById('updateProgress').style.display = 'block';
+    document.getElementById('updateChanges').style.display = 'none';
+
+    fetch('/api/update/apply', { method: 'POST' })
+        .then(r => r.json())
+        .then(d => {
+            if (!d.ok) {
+                document.getElementById('updateProgress').style.display = 'none';
+                document.getElementById('updateCheckBtn').disabled = false;
+                document.getElementById('updateApplyBtn').disabled = false;
+                setUpdateStatus('Failed to start update: ' + (d.error || ''), 'err');
+                return;
+            }
+            // Start polling for the server to come back on a different commit
+            pollForRestart();
+        })
+        .catch(() => {
+            // The server may have already started shutting down — fall through to poll
+            pollForRestart();
+        });
+}
+
+function pollForRestart() {
+    const detail = document.getElementById('updateProgressDetail');
+    const startedAt = Date.now();
+    let serverDied = false;
+
+    const tick = () => {
+        const elapsed = (Date.now() - startedAt) / 1000;
+        if (elapsed > 120) {
+            detail.textContent = 'Update is taking longer than expected. Refresh the page manually.';
+            return;
+        }
+        if (!serverDied) {
+            detail.textContent = `Stopping the dashboard… (${Math.floor(elapsed)}s)`;
+        } else {
+            detail.textContent = `Waiting for the new version to come online… (${Math.floor(elapsed)}s)`;
+        }
+
+        fetch('/api/update/info', { cache: 'no-store' })
+            .then(r => r.ok ? r.json() : null)
+            .then(d => {
+                if (!d || !d.ok) {
+                    serverDied = true;
+                    setTimeout(tick, 1500);
+                    return;
+                }
+                // If we already saw the server die and the commit hash has changed, we're done
+                if (serverDied && d.full && d.full !== currentCommit) {
+                    detail.textContent = 'Updated. Reloading…';
+                    setTimeout(() => location.reload(), 500);
+                    return;
+                }
+                setTimeout(tick, 1500);
+            })
+            .catch(() => {
+                serverDied = true;
+                setTimeout(tick, 1500);
+            });
+    };
+
+    tick();
+}
+
+function setUpdateStatus(msg, level) {
+    const el = document.getElementById('updateStatus');
+    if (!el) return;
+    el.textContent = msg;
+    el.className = 'update-status ' + (level || '');
 }
 
 

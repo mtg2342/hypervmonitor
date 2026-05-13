@@ -1,11 +1,16 @@
+import os
 import time
 import threading
+import subprocess
 import logging
 from flask import Flask, jsonify, request, render_template
 from db import init_db, get_connection
 from collector import MetricCollector
 from alerts import evaluate_alerts, get_settings, get_default_settings, save_settings
 from config import FLASK_HOST, FLASK_PORT, RANGE_SECONDS, RANGE_SOURCE, DB_PATH
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+RAW_DEPLOY = "https://raw.githubusercontent.com/mtg2342/hypervmonitor/main/deploy.ps1"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -297,6 +302,96 @@ def settings_reset():
         return jsonify({"ok": True, "effective": get_settings(conn)})
     finally:
         conn.close()
+
+
+# ── Update self ──────────────────────────────────────────────────────────────
+
+def _git(args, timeout=15):
+    try:
+        return subprocess.run(
+            ["git", "-C", BASE_DIR, *args],
+            capture_output=True, text=True, timeout=timeout,
+        )
+    except FileNotFoundError:
+        return None
+    except subprocess.TimeoutExpired:
+        return None
+
+
+@app.route("/api/update/info")
+def update_info():
+    """Return info about the currently-deployed commit."""
+    r = _git(["log", "-1", "--format=%h%n%H%n%s%n%cI%n%cr"])
+    if r is None or r.returncode != 0:
+        return jsonify({"ok": False, "error": "Not a git checkout (or git not on PATH)."})
+    parts = r.stdout.rstrip("\n").split("\n")
+    return jsonify({
+        "ok": True,
+        "short":    parts[0] if len(parts) > 0 else "",
+        "full":     parts[1] if len(parts) > 1 else "",
+        "subject":  parts[2] if len(parts) > 2 else "",
+        "date":     parts[3] if len(parts) > 3 else "",
+        "relative": parts[4] if len(parts) > 4 else "",
+    })
+
+
+@app.route("/api/update/check", methods=["POST"])
+def update_check():
+    """git fetch and return any incoming commits."""
+    r = _git(["fetch", "origin", "--quiet"], timeout=30)
+    if r is None:
+        return jsonify({"ok": False, "error": "git not available or timed out"})
+    if r.returncode != 0:
+        return jsonify({"ok": False, "error": (r.stderr or "git fetch failed")[:500]})
+
+    log = _git(["log", "--format=%h|%s|%cr", "HEAD..origin/main"])
+    if log is None or log.returncode != 0:
+        return jsonify({"ok": False, "error": "git log failed"})
+
+    commits = []
+    for line in log.stdout.splitlines():
+        parts = line.split("|", 2)
+        if len(parts) == 3:
+            commits.append({"hash": parts[0], "subject": parts[1], "relative": parts[2]})
+    return jsonify({
+        "ok": True,
+        "up_to_date": len(commits) == 0,
+        "count": len(commits),
+        "commits": commits[:25],
+    })
+
+
+@app.route("/api/update/apply", methods=["POST"])
+def update_apply():
+    """Spawn a detached process that re-runs deploy.ps1 (stops us, pulls, restarts)."""
+    if not os.path.isdir(os.path.join(BASE_DIR, ".git")):
+        return jsonify({"ok": False, "error": "Not a git checkout — re-run deploy.ps1 manually."})
+
+    # Set HVM_AUTO=1 so deploy.ps1 skips any interactive prompts.
+    # Sleep first so this HTTP handler can respond before we get killed.
+    ps_cmd = (
+        "$env:HVM_AUTO=1; "
+        "Start-Sleep -Seconds 3; "
+        f"iex (irm '{RAW_DEPLOY}')"
+    )
+    try:
+        DETACHED_PROCESS       = 0x00000008
+        CREATE_NEW_PROCESS_GROUP = 0x00000200
+        subprocess.Popen(
+            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+             "-NonInteractive", "-Command", ps_cmd],
+            creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+            cwd=BASE_DIR,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+        )
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+
+    logger.info("Update apply requested — restart imminent")
+    return jsonify({"ok": True, "message": "Update started. Dashboard will restart in ~10 seconds."})
 
 
 @app.route("/api/security/rdp")

@@ -29,6 +29,10 @@ $RAW_SCRIPT   = "https://raw.githubusercontent.com/$REPO_OWNER/$REPO_NAME/main/d
 $DEFAULT_PATH = 'C:\hypervmonitor'
 $TASK_NAME    = 'HyperVMonitor'
 
+# When HVM_AUTO=1 the script is being invoked from the in-app "Apply Update"
+# button or the nightly auto-update task. Skip prompts and default to safe choices.
+$AUTO = ($env:HVM_AUTO -eq '1')
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 function Write-Section($text) {
     Write-Host ''
@@ -153,10 +157,17 @@ $pyVersion = (& $python --version 2>&1) -replace '\r?\n',''
 Write-Host ("Python: $pyVersion ($python)") -ForegroundColor Green
 
 # ── Install location ─────────────────────────────────────────────────────────
-$path = $DEFAULT_PATH
+# If a checkout already exists somewhere else (e.g. the auto-update task is
+# running from inside the install dir itself), prefer the script's own path.
+if ((Test-Path "$PSScriptRoot\.git") -and (Test-Path "$PSScriptRoot\app.py")) {
+    $path = $PSScriptRoot
+} else {
+    $path = $DEFAULT_PATH
+}
 if ((Test-Path $path) -and -not (Test-Path "$path\.git")) {
     Write-Host ''
     Write-Host "Folder $path exists but is not a git checkout." -ForegroundColor Yellow
+    if ($AUTO) { Write-Host 'Auto mode: aborting to avoid data loss.' -ForegroundColor Red; return }
     $r = Read-Host 'Delete and re-clone? (y/N)'
     if ($r -ne 'y') { Write-Host 'Aborted.'; return }
     Remove-Item -Recurse -Force $path
@@ -198,7 +209,7 @@ Set-Content -Path "$path\.python_path" -Value $python -Encoding ASCII -NoNewline
 
 # ── Task Scheduler auto-start (only prompt if not already set up) ───────────
 $existingTask = Get-ScheduledTask -TaskName $TASK_NAME -ErrorAction SilentlyContinue
-if (-not $existingTask) {
+if (-not $existingTask -and -not $AUTO) {
     Write-Host ''
     $r = Read-Host 'Set up auto-start at login? (Y/n)'
     if ($r -ne 'n') {
@@ -214,13 +225,13 @@ if (-not $existingTask) {
 # ── Optional: daily auto-update from GitHub ─────────────────────────────────
 $AUTO_UPDATE_TASK = 'HyperVMonitorAutoUpdate'
 $existingAuto = Get-ScheduledTask -TaskName $AUTO_UPDATE_TASK -ErrorAction SilentlyContinue
-if (-not $existingAuto) {
+if (-not $existingAuto -and -not $AUTO) {
     Write-Host ''
     Write-Host 'Auto-update will check GitHub once a day at 3:30 AM and reapply if'
     Write-Host 'changes are available. Runs the same deploy.ps1 you just used.'
     $r = Read-Host 'Enable daily auto-update at 3:30 AM? (Y/n)'
     if ($r -ne 'n') {
-        $autoCmd  = "iex (irm $RAW_SCRIPT)"
+        $autoCmd  = "`$env:HVM_AUTO=1; iex (irm $RAW_SCRIPT)"
         $autoArg  = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command `"$autoCmd`""
         $autoAction    = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $autoArg
         $autoTrigger   = New-ScheduledTaskTrigger -Daily -At 3:30am
@@ -244,7 +255,12 @@ Write-Host ""
 Write-Host 'Starting Hyper-V Monitor...' -ForegroundColor Cyan
 Start-Process -FilePath "$path\start.bat" -WorkingDirectory $path
 Start-Sleep -Seconds 4
-Start-Process 'http://127.0.0.1:5000'
+
+# Only open the browser when run interactively. The web-UI Apply Update and
+# the nightly auto-update task don't need a new browser window.
+if (-not $AUTO) {
+    Start-Process 'http://127.0.0.1:5000'
+}
 
 Write-Host ''
-Write-Host 'Dashboard launching in your default browser.' -ForegroundColor Green
+Write-Host 'Dashboard ready.' -ForegroundColor Green
