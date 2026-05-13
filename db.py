@@ -104,6 +104,18 @@ def init_db(db_path=None):
     """)
     c.execute("CREATE INDEX IF NOT EXISTS idx_alerts_active ON alerts(ts_cleared)")
 
+    # Per-(target, metric) suppression state, used to honour a user dismissal
+    # until the underlying condition is observed normal at least once.
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS alert_state (
+            target              TEXT NOT NULL,
+            metric              TEXT NOT NULL,
+            last_dismissed_ts   REAL,
+            last_normal_ts      REAL,
+            PRIMARY KEY (target, metric)
+        )
+    """)
+
     # ── Hourly + Daily rollups for long-term history ─────────────────
     for suffix in ("hourly", "daily"):
         c.execute(f"""

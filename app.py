@@ -785,12 +785,31 @@ def alerts_active():
 
 @app.route("/api/alerts/<int:alert_id>/dismiss", methods=["POST"])
 def alert_dismiss(alert_id):
+    """Manually dismiss an active alert.
+
+    Also records (target, metric, last_dismissed_ts) in alert_state so the
+    monitor won't re-raise the same alert on the next poll just because the
+    underlying condition is still bad. The suppression is released once the
+    condition is observed normal at least once (handled by _clear_alert).
+    """
     conn = get_connection()
     try:
+        now = time.time()
+        row = conn.execute(
+            "SELECT target, metric FROM alerts WHERE id = ?", (alert_id,)
+        ).fetchone()
         conn.execute(
             "UPDATE alerts SET ts_cleared = ? WHERE id = ? AND ts_cleared IS NULL",
-            (time.time(), alert_id),
+            (now, alert_id),
         )
+        if row:
+            conn.execute(
+                """INSERT INTO alert_state (target, metric, last_dismissed_ts)
+                   VALUES (?,?,?)
+                   ON CONFLICT(target, metric) DO UPDATE SET
+                     last_dismissed_ts = excluded.last_dismissed_ts""",
+                (row["target"], row["metric"], now),
+            )
         conn.commit()
         return jsonify({"ok": True})
     finally:

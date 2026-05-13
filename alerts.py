@@ -176,12 +176,45 @@ def _check_veeam_backups(conn, ts):
     )
 
 
+def _is_user_suppressed(conn, target, metric):
+    """Return True when the user has dismissed an alert for (target, metric)
+    and the condition has NOT been observed normal since that dismissal.
+
+    This honours the user's intent: "I've acknowledged this — stop nagging me
+    until it actually clears and recurs."
+    """
+    row = conn.execute(
+        "SELECT last_dismissed_ts, last_normal_ts FROM alert_state WHERE target=? AND metric=?",
+        (target, metric),
+    ).fetchone()
+    if not row:
+        return False
+    dismissed = row["last_dismissed_ts"] or 0
+    normal    = row["last_normal_ts"] or 0
+    return dismissed > normal
+
+
+def _record_normal(conn, target, metric, ts):
+    """Mark (target, metric) as observed-normal at `ts`. This releases any
+    prior user-dismiss suppression for the same key."""
+    conn.execute(
+        """INSERT INTO alert_state (target, metric, last_normal_ts) VALUES (?,?,?)
+           ON CONFLICT(target, metric) DO UPDATE SET
+             last_normal_ts = excluded.last_normal_ts""",
+        (target, metric, ts),
+    )
+
+
 def _raise_alert(conn, ts, severity, target, metric, message, value):
+    # Already active alert for this (target, metric) — nothing to do
     existing = conn.execute(
         "SELECT id FROM alerts WHERE target=? AND metric=? AND ts_cleared IS NULL",
         (target, metric),
     ).fetchone()
     if existing:
+        return
+    # User dismissed this and condition hasn't cleared yet — stay quiet
+    if _is_user_suppressed(conn, target, metric):
         return
     conn.execute(
         "INSERT INTO alerts (ts_raised, severity, target, metric, message, value) VALUES (?,?,?,?,?,?)",
@@ -195,6 +228,10 @@ def _clear_alert(conn, ts, target, metric):
         "UPDATE alerts SET ts_cleared=? WHERE target=? AND metric=? AND ts_cleared IS NULL",
         (ts, target, metric),
     )
+    # Recording a "normal" observation here releases any prior dismissal
+    # suppression — the next time the condition goes bad, a new alert will
+    # fire normally.
+    _record_normal(conn, target, metric, ts)
 
 
 def _get_recent_values(conn, table, column, where_clause, params, count):
