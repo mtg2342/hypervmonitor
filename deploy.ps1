@@ -231,8 +231,14 @@ if (-not $existingAuto -and -not $AUTO) {
     Write-Host 'changes are available. Runs the same deploy.ps1 you just used.'
     $r = Read-Host 'Enable daily auto-update at 3:30 AM? (Y/n)'
     if ($r -ne 'n') {
-        $autoCmd  = "`$env:HVM_AUTO=1; iex (irm $RAW_SCRIPT)"
-        $autoArg  = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command `"$autoCmd`""
+        # Prefer apply-update.ps1 (on-disk, no network dep) over iex (irm ...) if available
+        $applyScript = Join-Path $path 'apply-update.ps1'
+        if (Test-Path $applyScript) {
+            $autoArg = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$applyScript`""
+        } else {
+            $autoCmd = "`$env:HVM_AUTO=1; iex (irm $RAW_SCRIPT)"
+            $autoArg = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command `"$autoCmd`""
+        }
         $autoAction    = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $autoArg
         $autoTrigger   = New-ScheduledTaskTrigger -Daily -At 3:30am
         $autoPrincipal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest

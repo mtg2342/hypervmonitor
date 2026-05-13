@@ -28,6 +28,7 @@ config.local.py
 
 # Logs
 *.log
+apply-update.log
 
 # OS
 Thumbs.db

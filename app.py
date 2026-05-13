@@ -228,15 +228,15 @@ def autoupdate_status():
 
 @app.route("/api/autoupdate/enable", methods=["POST"])
 def autoupdate_enable():
-    """Create the daily 3:30 AM Task Scheduler entry that re-runs deploy.ps1."""
+    """Create the daily 3:30 AM Task Scheduler entry that runs apply-update.ps1."""
     if _auto_update_task_exists():
         return jsonify({"ok": True, "enabled": True, "message": "Already enabled."})
-    ps_cmd = (
-        f"$env:HVM_AUTO=1; iex (irm '{RAW_DEPLOY}')"
-    )
+    script_path = os.path.join(BASE_DIR, "apply-update.ps1")
+    if not os.path.exists(script_path):
+        return jsonify({"ok": False, "error": "apply-update.ps1 not found in install directory"})
+    arg = f'-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{script_path}"'
     script = (
-        "$action = New-ScheduledTaskAction -Execute 'powershell.exe' "
-        f"-Argument '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command \"{ps_cmd}\"'; "
+        f"$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '{arg}'; "
         "$trigger = New-ScheduledTaskTrigger -Daily -At 3:30am; "
         "$principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest; "
         "$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries "
@@ -533,37 +533,83 @@ def update_check():
     })
 
 
+APPLY_UPDATE_TASK = "HyperVMonitorApplyUpdate"
+
+
+def _apply_update_task_exists():
+    try:
+        r = subprocess.run(
+            ["schtasks.exe", "/Query", "/TN", APPLY_UPDATE_TASK],
+            capture_output=True, text=True, timeout=10,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def _register_apply_update_task():
+    """Idempotently create the HyperVMonitorApplyUpdate task.
+
+    The task has a far-future trigger so it never fires on its own — we only
+    invoke it via `schtasks /Run`. It launches apply-update.ps1 as SYSTEM,
+    fully independent of the Python process that triggered it.
+    """
+    script_path = os.path.join(BASE_DIR, "apply-update.ps1")
+    if not os.path.exists(script_path):
+        return False, f"apply-update.ps1 not found at {script_path}"
+
+    if _apply_update_task_exists():
+        return True, "exists"
+
+    arg = f'-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{script_path}"'
+    register_script = (
+        f"$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '{arg}'; "
+        "$trigger = New-ScheduledTaskTrigger -Once -At '2099-12-31T23:59'; "
+        "$principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest; "
+        "$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries "
+        "-StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 30); "
+        f"Register-ScheduledTask -TaskName '{APPLY_UPDATE_TASK}' -Action $action -Trigger $trigger "
+        "-Principal $principal -Settings $settings -Force | Out-Null"
+    )
+    try:
+        r = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", register_script],
+            capture_output=True, text=True, timeout=20,
+        )
+        if r.returncode != 0:
+            return False, (r.stderr or "Register-ScheduledTask failed")[:500]
+        return True, "created"
+    except Exception as e:
+        return False, str(e)
+
+
 @app.route("/api/update/apply", methods=["POST"])
 def update_apply():
-    """Spawn a detached process that re-runs deploy.ps1 (stops us, pulls, restarts)."""
+    """Run apply-update.ps1 via Task Scheduler so the spawned process survives
+    after we kill ourselves during the update."""
     if not os.path.isdir(os.path.join(BASE_DIR, ".git")):
         return jsonify({"ok": False, "error": "Not a git checkout — re-run deploy.ps1 manually."})
 
-    # Set HVM_AUTO=1 so deploy.ps1 skips any interactive prompts.
-    # Sleep first so this HTTP handler can respond before we get killed.
-    ps_cmd = (
-        "$env:HVM_AUTO=1; "
-        "Start-Sleep -Seconds 3; "
-        f"iex (irm '{RAW_DEPLOY}')"
-    )
+    ok, msg = _register_apply_update_task()
+    if not ok:
+        return jsonify({"ok": False, "error": f"Could not prepare update task: {msg}"})
+
     try:
-        DETACHED_PROCESS       = 0x00000008
-        CREATE_NEW_PROCESS_GROUP = 0x00000200
-        subprocess.Popen(
-            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
-             "-NonInteractive", "-Command", ps_cmd],
-            creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
-            cwd=BASE_DIR,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            close_fds=True,
+        r = subprocess.run(
+            ["schtasks.exe", "/Run", "/TN", APPLY_UPDATE_TASK],
+            capture_output=True, text=True, timeout=10,
         )
+        if r.returncode != 0:
+            return jsonify({"ok": False, "error": (r.stderr or "schtasks /Run failed")[:500]})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
 
-    logger.info("Update apply requested — restart imminent")
-    return jsonify({"ok": True, "message": "Update started. Dashboard will restart in ~10 seconds."})
+    logger.info("Update apply triggered via Task Scheduler (%s)", APPLY_UPDATE_TASK)
+    return jsonify({
+        "ok": True,
+        "message": "Update started via Task Scheduler. Dashboard will restart in ~10 seconds.",
+        "task_action": msg,  # "created" or "exists"
+    })
 
 
 @app.route("/api/security/rdp")
