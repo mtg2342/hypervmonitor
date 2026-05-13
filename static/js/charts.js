@@ -1,6 +1,6 @@
 const CHART_COLORS = [
-    '#4c9aff', '#36b37e', '#ff8b00', '#ff5630',
-    '#a78bfa', '#00b8d9', '#f9a8d4', '#fbbf24',
+    '#5b9dff', '#3ddc97', '#f5b14a', '#ff6b6b',
+    '#a78bfa', '#56cfe1', '#ec98c5', '#fcd34d',
 ];
 
 const CHART_DEFAULTS = {
@@ -9,33 +9,67 @@ const CHART_DEFAULTS = {
     maintainAspectRatio: false,
     plugins: {
         legend: {
-            labels: { color: '#8b8fa3', font: { size: 11 } }
+            labels: {
+                color: '#9197ac',
+                font: { size: 11, family: 'Inter, system-ui, sans-serif' },
+                boxWidth: 12,
+                boxHeight: 12,
+                padding: 12,
+                usePointStyle: true,
+                pointStyle: 'circle',
+            }
         },
         tooltip: {
-            backgroundColor: '#1a1d27',
-            borderColor: '#2a2e3f',
+            backgroundColor: 'rgba(17, 21, 31, 0.96)',
+            borderColor: '#1f2535',
             borderWidth: 1,
-            titleColor: '#e4e6f0',
-            bodyColor: '#8b8fa3',
-            padding: 8,
+            titleColor: '#e6e9f2',
+            bodyColor: '#9197ac',
+            padding: 10,
+            cornerRadius: 6,
+            titleFont: { family: 'Inter, system-ui, sans-serif', size: 12, weight: '600' },
+            bodyFont: { family: 'Inter, system-ui, sans-serif', size: 11 },
+            displayColors: true,
+            boxPadding: 5,
         },
     },
     scales: {
         x: {
-            ticks: { color: '#5a5e72', font: { size: 10 }, maxTicksLimit: 12 },
-            grid: { color: '#2a2e3f', drawBorder: false },
+            ticks: {
+                color: '#5d6378',
+                font: { size: 10, family: 'Inter, system-ui, sans-serif' },
+                maxTicksLimit: 10,
+            },
+            grid: { color: 'rgba(255,255,255,0.04)', drawBorder: false },
+            border: { display: false },
         },
         y: {
-            ticks: { color: '#5a5e72', font: { size: 10 } },
-            grid: { color: '#2a2e3f', drawBorder: false },
+            ticks: {
+                color: '#5d6378',
+                font: { size: 10, family: 'Inter, system-ui, sans-serif' },
+            },
+            grid: { color: 'rgba(255,255,255,0.04)', drawBorder: false },
+            border: { display: false },
             beginAtZero: true,
         },
     },
+    elements: {
+        line: { borderJoinStyle: 'round', borderCapStyle: 'round' },
+    },
 };
 
-function createSparkline(canvasId, maxPoints) {
+function hexToRgba(hex, alpha) {
+    const h = hex.replace('#', '');
+    const r = parseInt(h.substring(0, 2), 16);
+    const g = parseInt(h.substring(2, 4), 16);
+    const b = parseInt(h.substring(4, 6), 16);
+    return 'rgba(' + r + ',' + g + ',' + b + ',' + alpha + ')';
+}
+
+function createSparkline(canvasId, maxPoints, color) {
     const ctx = document.getElementById(canvasId);
     if (!ctx) return null;
+    const c = color || '#5b9dff';
     const data = [];
     const labels = [];
     const chart = new Chart(ctx, {
@@ -44,12 +78,12 @@ function createSparkline(canvasId, maxPoints) {
             labels: labels,
             datasets: [{
                 data: data,
-                borderColor: '#4c9aff',
+                borderColor: c,
                 borderWidth: 1.5,
                 pointRadius: 0,
                 fill: true,
-                backgroundColor: 'rgba(76, 154, 255, 0.08)',
-                tension: 0.3,
+                backgroundColor: hexToRgba(c, 0.14),
+                tension: 0.35,
             }],
         },
         options: {
@@ -60,6 +94,7 @@ function createSparkline(canvasId, maxPoints) {
                 x: { display: false },
                 y: { display: false, min: 0 },
             },
+            elements: { line: { borderJoinStyle: 'round', borderCapStyle: 'round' } },
         },
     });
 
@@ -68,7 +103,7 @@ function createSparkline(canvasId, maxPoints) {
         push(val) {
             data.push(val);
             labels.push('');
-            if (data.length > (maxPoints || 20)) {
+            if (data.length > (maxPoints || 30)) {
                 data.shift();
                 labels.shift();
             }
@@ -76,7 +111,7 @@ function createSparkline(canvasId, maxPoints) {
         },
         setColor(color) {
             chart.data.datasets[0].borderColor = color;
-            chart.data.datasets[0].backgroundColor = color.replace(')', ', 0.08)').replace('rgb', 'rgba');
+            chart.data.datasets[0].backgroundColor = hexToRgba(color, 0.14);
         },
         setMax(max) {
             chart.options.scales.y.max = max;

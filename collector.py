@@ -3,10 +3,11 @@ import json
 import time
 import threading
 import logging
-from db import get_connection, purge_old_data
+from db import get_connection, purge_old_data, rollup_aggregates
 from config import (
     POLL_INTERVAL, VHD_POLL_MULTIPLE, PURGE_CHECK_MULTIPLE,
     SYSINFO_POLL_MULTIPLE, EVENTLOG_POLL_MULTIPLE, UPDATES_POLL_MULTIPLE,
+    ROLLUP_POLL_MULTIPLE,
     EVENTLOG_LOOKBACK_HOURS, EVENTLOG_MAX_EVENTS,
 )
 
@@ -77,6 +78,8 @@ class MetricCollector:
                 self._collect_vhd(conn, ts)
             if self._poll_count == 1 or self._poll_count % UPDATES_POLL_MULTIPLE == 0:
                 self._collect_pending_updates(conn, ts)
+            if self._poll_count % ROLLUP_POLL_MULTIPLE == 0:
+                rollup_aggregates(conn)
             if self._poll_count % PURGE_CHECK_MULTIPLE == 0:
                 purge_old_data(conn)
             conn.commit()

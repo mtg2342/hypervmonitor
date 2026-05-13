@@ -5,7 +5,7 @@ from flask import Flask, jsonify, request, render_template
 from db import init_db, get_connection
 from collector import MetricCollector
 from alerts import evaluate_alerts
-from config import FLASK_HOST, FLASK_PORT, RANGE_SECONDS, DOWNSAMPLE, DB_PATH
+from config import FLASK_HOST, FLASK_PORT, RANGE_SECONDS, RANGE_SOURCE, DB_PATH
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,29 +26,94 @@ def _rows_to_dicts(rows):
     return [dict(r) for r in rows]
 
 
-def _history_query(base_sql, columns, range_key, extra_where="", params=()):
-    cutoff = _ts_cutoff(range_key)
-    bucket = DOWNSAMPLE.get(range_key)
-    all_params = (*params, cutoff)
+def _range_source(range_key):
+    return RANGE_SOURCE.get(range_key, ("raw", None))
 
-    if bucket:
-        group_cols = ", ".join(f"AVG({c}) AS {c}" for c in columns)
-        sql = (
-            f"SELECT CAST(ts / {bucket} AS INTEGER) * {bucket} AS ts, {group_cols} "
-            f"FROM ({base_sql}) sub "
-            f"WHERE ts > ? {extra_where} "
-            f"GROUP BY CAST(ts / {bucket} AS INTEGER) ORDER BY ts"
-        )
-    else:
-        col_list = ", ".join(["ts"] + columns)
-        sql = (
-            f"SELECT {col_list} FROM ({base_sql}) sub "
-            f"WHERE ts > ? {extra_where} ORDER BY ts"
-        )
+
+def _query_host_history(range_key):
+    """Return [{ts, cpu_pct, mem_pct, disk_read_bps, disk_write_bps}, ...]."""
+    cutoff = _ts_cutoff(range_key)
+    source, bucket = _range_source(range_key)
 
     conn = get_connection()
     try:
-        rows = conn.execute(sql, all_params).fetchall()
+        if source == "raw":
+            if bucket:
+                sql = f"""
+                    SELECT CAST(ts / {bucket} AS INTEGER) * {bucket} AS ts,
+                           AVG(cpu_pct) AS cpu_pct,
+                           AVG(mem_pct) AS mem_pct,
+                           AVG(disk_read_bps) AS disk_read_bps,
+                           AVG(disk_write_bps) AS disk_write_bps
+                    FROM host_metrics WHERE ts > ?
+                    GROUP BY CAST(ts / {bucket} AS INTEGER) ORDER BY ts
+                """
+            else:
+                sql = """
+                    SELECT ts, cpu_pct, mem_pct, disk_read_bps, disk_write_bps
+                    FROM host_metrics WHERE ts > ? ORDER BY ts
+                """
+            rows = conn.execute(sql, (cutoff,)).fetchall()
+        else:
+            table = "host_metrics_hourly" if source == "hourly" else "host_metrics_daily"
+            sql = f"""
+                SELECT bucket_ts AS ts,
+                       cpu_pct_avg AS cpu_pct,
+                       mem_pct_avg AS mem_pct,
+                       disk_read_avg AS disk_read_bps,
+                       disk_write_avg AS disk_write_bps
+                FROM {table} WHERE bucket_ts > ? ORDER BY bucket_ts
+            """
+            rows = conn.execute(sql, (cutoff,)).fetchall()
+        return _rows_to_dicts(rows)
+    finally:
+        conn.close()
+
+
+def _query_vms_history(range_key, vm_name=None):
+    cutoff = _ts_cutoff(range_key)
+    source, bucket = _range_source(range_key)
+
+    conn = get_connection()
+    try:
+        if source == "raw":
+            base_cols = ("cpu_usage", "mem_assigned", "mem_demand",
+                         "net_sent_bps", "net_recv_bps",
+                         "disk_read_bps", "disk_write_bps")
+            if bucket:
+                avg_cols = ", ".join(f"AVG({c}) AS {c}" for c in base_cols)
+                where = "WHERE ts > ?" + (" AND vm_name = ?" if vm_name else "")
+                params = (cutoff,) + ((vm_name,) if vm_name else ())
+                sql = f"""
+                    SELECT CAST(ts / {bucket} AS INTEGER) * {bucket} AS ts,
+                           vm_name, {avg_cols}
+                    FROM vm_metrics {where}
+                    GROUP BY vm_name, CAST(ts / {bucket} AS INTEGER)
+                    ORDER BY ts
+                """
+                rows = conn.execute(sql, params).fetchall()
+            else:
+                col_list = ", ".join(base_cols)
+                where = "WHERE ts > ?" + (" AND vm_name = ?" if vm_name else "")
+                params = (cutoff,) + ((vm_name,) if vm_name else ())
+                sql = f"SELECT ts, vm_name, {col_list} FROM vm_metrics {where} ORDER BY ts"
+                rows = conn.execute(sql, params).fetchall()
+        else:
+            table = "vm_metrics_hourly" if source == "hourly" else "vm_metrics_daily"
+            where = "WHERE bucket_ts > ?" + (" AND vm_name = ?" if vm_name else "")
+            params = (cutoff,) + ((vm_name,) if vm_name else ())
+            sql = f"""
+                SELECT bucket_ts AS ts, vm_name,
+                       cpu_usage_avg AS cpu_usage,
+                       mem_assigned_avg AS mem_assigned,
+                       mem_demand_avg AS mem_demand,
+                       net_sent_avg AS net_sent_bps,
+                       net_recv_avg AS net_recv_bps,
+                       disk_read_avg AS disk_read_bps,
+                       disk_write_avg AS disk_write_bps
+                FROM {table} {where} ORDER BY bucket_ts
+            """
+            rows = conn.execute(sql, params).fetchall()
         return _rows_to_dicts(rows)
     finally:
         conn.close()
@@ -82,12 +147,7 @@ def host_current():
 @app.route("/api/host/history")
 def host_history():
     range_key = request.args.get("range", "1h")
-    data = _history_query(
-        "SELECT ts, cpu_pct, mem_pct, disk_read_bps, disk_write_bps FROM host_metrics",
-        ["cpu_pct", "mem_pct", "disk_read_bps", "disk_write_bps"],
-        range_key,
-    )
-    return jsonify(data)
+    return jsonify(_query_host_history(range_key))
 
 
 @app.route("/api/vms/current")
@@ -109,63 +169,7 @@ def vms_current():
 def vms_history():
     range_key = request.args.get("range", "1h")
     vm_name = request.args.get("vm")
-    cutoff = _ts_cutoff(range_key)
-    bucket = DOWNSAMPLE.get(range_key)
-
-    conn = get_connection()
-    try:
-        if vm_name:
-            if bucket:
-                sql = f"""
-                    SELECT CAST(ts / {bucket} AS INTEGER) * {bucket} AS ts,
-                           vm_name,
-                           AVG(cpu_usage) AS cpu_usage,
-                           AVG(mem_assigned) AS mem_assigned,
-                           AVG(mem_demand) AS mem_demand,
-                           AVG(net_sent_bps) AS net_sent_bps,
-                           AVG(net_recv_bps) AS net_recv_bps,
-                           AVG(disk_read_bps) AS disk_read_bps,
-                           AVG(disk_write_bps) AS disk_write_bps
-                    FROM vm_metrics WHERE ts > ? AND vm_name = ?
-                    GROUP BY CAST(ts / {bucket} AS INTEGER)
-                    ORDER BY ts
-                """
-                rows = conn.execute(sql, (cutoff, vm_name)).fetchall()
-            else:
-                rows = conn.execute(
-                    """SELECT ts, vm_name, cpu_usage, mem_assigned, mem_demand,
-                              net_sent_bps, net_recv_bps, disk_read_bps, disk_write_bps
-                       FROM vm_metrics WHERE ts > ? AND vm_name = ? ORDER BY ts""",
-                    (cutoff, vm_name),
-                ).fetchall()
-        else:
-            if bucket:
-                sql = f"""
-                    SELECT CAST(ts / {bucket} AS INTEGER) * {bucket} AS ts,
-                           vm_name,
-                           AVG(cpu_usage) AS cpu_usage,
-                           AVG(mem_assigned) AS mem_assigned,
-                           AVG(mem_demand) AS mem_demand,
-                           AVG(net_sent_bps) AS net_sent_bps,
-                           AVG(net_recv_bps) AS net_recv_bps,
-                           AVG(disk_read_bps) AS disk_read_bps,
-                           AVG(disk_write_bps) AS disk_write_bps
-                    FROM vm_metrics WHERE ts > ?
-                    GROUP BY vm_name, CAST(ts / {bucket} AS INTEGER)
-                    ORDER BY ts
-                """
-                rows = conn.execute(sql, (cutoff,)).fetchall()
-            else:
-                rows = conn.execute(
-                    """SELECT ts, vm_name, cpu_usage, mem_assigned, mem_demand,
-                              net_sent_bps, net_recv_bps, disk_read_bps, disk_write_bps
-                       FROM vm_metrics WHERE ts > ? ORDER BY ts""",
-                    (cutoff,),
-                ).fetchall()
-
-        return jsonify(_rows_to_dicts(rows))
-    finally:
-        conn.close()
+    return jsonify(_query_vms_history(range_key, vm_name))
 
 
 @app.route("/api/vhd/current")

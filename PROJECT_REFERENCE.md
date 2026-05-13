@@ -155,7 +155,30 @@ Uses `Microsoft.Update.Session` COM object — slow (can take 30+ seconds) but a
 
 **Indexes:** All time-series tables are indexed on `ts`. WAL mode (`PRAGMA journal_mode=WAL`) enables concurrent reads during collector writes.
 
-**Retention:** Raw rows older than 7 days are purged hourly. Cleared alerts older than 90 days are also purged. VACUUM runs only when >10 000 rows are deleted.
+### Retention & rollup chain
+
+The host accumulates data over months. To keep the database small, raw 30-second samples are rolled up into hourly and daily aggregate tables:
+
+| Table | Granularity | Retention |
+|---|---|---|
+| `host_metrics`, `vm_metrics` | 30 seconds (raw) | 48 hours |
+| `host_metrics_hourly`, `vm_metrics_hourly` | 1 hour (avg + max) | 30 days |
+| `host_metrics_daily`, `vm_metrics_daily` | 1 day (avg + max) | 120 days (~4 months) |
+| `system_events` | per event | 30 days |
+| `alerts` (cleared) | per alert | 90 days |
+
+The rollup job (`rollup_aggregates()` in `db.py`) runs every hour. It looks for any completed hour/day not already aggregated, computes averages and maximums from the source table, and inserts into the rollup table. Raw rows older than 48h are then purged.
+
+**Query routing** (in `app.py`):
+
+| Range button | Source table |
+|---|---|
+| 1H, 6H | raw `host_metrics` / `vm_metrics` |
+| 24H | raw, downsampled to 5-min buckets |
+| 7D, 30D | `*_hourly` rollup |
+| 4M | `*_daily` rollup |
+
+VACUUM runs only when >10 000 rows are deleted in a single purge.
 
 ---
 

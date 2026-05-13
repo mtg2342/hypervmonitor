@@ -7,9 +7,10 @@ const vmSparklines = {};
 // ── Initialization ──────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
-    sparklines.cpu = createSparkline('sparkHostCpu', 20);
-    sparklines.mem = createSparkline('sparkHostMem', 20);
-    sparklines.disk = createSparkline('sparkHostDisk', 20);
+    sparklines.cpu    = createSparkline('sparkHostCpu',   30, '#5b9dff');
+    sparklines.mem    = createSparkline('sparkHostMem',   30, '#3ddc97');
+    sparklines.diskR  = createSparkline('sparkHostDiskR', 30, '#f5b14a');
+    sparklines.diskW  = createSparkline('sparkHostDiskW', 30, '#a78bfa');
 
     if (sparklines.cpu) sparklines.cpu.setMax(100);
     if (sparklines.mem) sparklines.mem.setMax(100);
@@ -182,36 +183,46 @@ function updateHostCards(host) {
     const m = host.metrics;
     if (!m) return;
 
-    const cpuVal = m.cpu_pct != null ? m.cpu_pct.toFixed(0) + '%' : '--%';
-    const memVal = m.mem_pct != null ? m.mem_pct.toFixed(0) + '%' : '--%';
-    const diskR = formatRate(m.disk_read_bps);
-    const diskW = formatRate(m.disk_write_bps);
+    setKpiValue('hostCpuVal', m.cpu_pct, '%');
+    setKpiValue('hostMemVal', m.mem_pct, '%');
 
-    document.getElementById('hostCpuVal').textContent = cpuVal;
-    setValueColor('hostCpuVal', m.cpu_pct);
+    document.getElementById('hostDiskReadVal').innerHTML  = formatRateHtml(m.disk_read_bps);
+    document.getElementById('hostDiskWriteVal').innerHTML = formatRateHtml(m.disk_write_bps);
 
-    document.getElementById('hostMemVal').textContent = memVal;
-    setValueColor('hostMemVal', m.mem_pct);
-
-    document.getElementById('hostDiskVal').textContent = 'R ' + diskR + ' / W ' + diskW;
-
-    if (sparklines.cpu && m.cpu_pct != null) sparklines.cpu.push(m.cpu_pct);
-    if (sparklines.mem && m.mem_pct != null) sparklines.mem.push(m.mem_pct);
-    if (sparklines.disk && m.disk_read_bps != null) {
-        sparklines.disk.push(m.disk_read_bps / (1024 * 1024));
-    }
+    if (sparklines.cpu && m.cpu_pct != null)  sparklines.cpu.push(m.cpu_pct);
+    if (sparklines.mem && m.mem_pct != null)  sparklines.mem.push(m.mem_pct);
+    if (sparklines.diskR && m.disk_read_bps != null)
+        sparklines.diskR.push(m.disk_read_bps / (1024 * 1024));
+    if (sparklines.diskW && m.disk_write_bps != null)
+        sparklines.diskW.push(m.disk_write_bps / (1024 * 1024));
 
     updateVolumes(host.volumes);
 }
 
-function setValueColor(elementId, pct) {
+function setKpiValue(elementId, pct, suffix) {
     const el = document.getElementById(elementId);
-    if (pct == null) return;
+    if (pct == null) {
+        el.innerHTML = '--<span style="font-size:16px;color:var(--text-3)">' + (suffix || '') + '</span>';
+        el.className = 'card-value';
+        return;
+    }
+    const val = Math.round(pct);
+    el.innerHTML = val + '<span style="font-size:16px;color:var(--text-3);margin-left:1px">' + suffix + '</span>';
     el.className = 'card-value';
-    if (pct >= 95) el.classList.add('text-red');
-    else if (pct >= 85) el.classList.add('text-orange');
+    if (pct >= 95)      el.classList.add('is-crit');
+    else if (pct >= 85) el.classList.add('is-warn');
     else if (pct >= 50) el.classList.add('text-blue');
-    else el.classList.add('text-green');
+    else                el.classList.add('is-ok');
+}
+
+function formatRateHtml(bps) {
+    if (bps == null) return '--';
+    let val, unit;
+    if (bps >= 1e9)      { val = (bps / 1e9).toFixed(1); unit = 'GB/s'; }
+    else if (bps >= 1e6) { val = (bps / 1e6).toFixed(1); unit = 'MB/s'; }
+    else if (bps >= 1e3) { val = (bps / 1e3).toFixed(0); unit = 'KB/s'; }
+    else                 { val = Math.round(bps); unit = 'B/s'; }
+    return val + '<span style="font-size:14px;color:var(--text-3);margin-left:4px;font-weight:500">' + unit + '</span>';
 }
 
 function updateVolumes(volumes) {
@@ -242,9 +253,12 @@ function updateVolumes(volumes) {
 
 function updateVmGrid(vms) {
     const grid = document.getElementById('vmGrid');
+    const countEl = document.getElementById('vmCount');
+    if (countEl) countEl.textContent = vms && vms.length ? vms.length : '';
+
     if (!vms || vms.length === 0) {
         if (grid.children.length === 0) {
-            grid.innerHTML = '<div class="no-data">Waiting for VM data...</div>';
+            grid.innerHTML = '<div class="no-data">No VMs detected on this host</div>';
         }
         return;
     }
