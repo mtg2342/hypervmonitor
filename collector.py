@@ -555,20 +555,31 @@ class MetricCollector:
             "} catch { $result['RdpSuccess24h'] = -1 }; "
             "try { "
             "  $reasons = @(); "
-            # Component Based Servicing — set when a Windows servicing
-            # operation (feature install, update, patch) needs a reboot.
-            # This is the most reliable indicator and what wuauclt uses.
+            "  $comReboot = $null; "
+            # Authoritative check: ask Windows itself via the Windows Update
+            # COM API. This is what Windows Update Agent uses internally and
+            # avoids false positives from stale registry keys that didn't get
+            # cleaned up after a previous reboot.
+            "  try { "
+            "    $sysInfo = New-Object -ComObject Microsoft.Update.SystemInfo; "
+            "    $comReboot = [bool]$sysInfo.RebootRequired "
+            "  } catch {}; "
+            # Registry indicators — used both as reasons (when COM agrees a
+            # reboot is needed) and as a fallback when the COM call fails.
             "  if (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\RebootPending') { $reasons += 'Component Based Servicing' }; "
-            # Windows Update — set by wuauserv when an update has staged
-            # files that won't be effective until reboot.
             "  if (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update\\RebootRequired') { $reasons += 'Windows Update' }; "
-            # Server Manager pending operations (Windows Server only).
             "  if (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\ServerManager\\CurrentRebootAttempts') { $reasons += 'Server Manager' }; "
-            # NOTE: PendingFileRenameOperations and Netlogon\\JoinDomain
-            # used to be in this list but were too noisy — both get set
-            # for routine non-reboot reasons (installers writing temp
-            # files, domain rejoin attempts) and caused false positives.
-            "  $result['PendingReboot'] = [int]($reasons.Count -gt 0); "
+            "  if ($comReboot -eq $true) { "
+            "    $result['PendingReboot'] = 1; "
+            "    if ($reasons.Count -eq 0) { $reasons = @('Windows Update Agent') } "
+            "  } elseif ($comReboot -eq $false) { "
+            # Windows says no reboot needed — trust it over stale registry keys
+            "    $result['PendingReboot'] = 0; "
+            "    $reasons = @() "
+            "  } else { "
+            # COM call failed — fall back to registry-only detection
+            "    $result['PendingReboot'] = [int]($reasons.Count -gt 0) "
+            "  }; "
             "  $result['RebootReasons'] = ($reasons -join ', '); "
             "} catch { $result['PendingReboot'] = 0; $result['RebootReasons'] = '' }; "
             "$result | ConvertTo-Json -Compress -Depth 3"
