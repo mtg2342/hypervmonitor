@@ -46,16 +46,23 @@ document.addEventListener('DOMContentLoaded', () => {
         switchView(btn.dataset.view);
     });
 
-    // Alert filter pills
+    // Filter pills (alert history + RDP)
     document.querySelectorAll('.filter-pills').forEach(group => {
         group.addEventListener('click', e => {
             const pill = e.target.closest('.pill');
             if (!pill) return;
             group.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
             pill.classList.add('active');
-            alertFilter[group.dataset.filter] = pill.dataset.value;
-            alertPage.offset = 0;
-            fetchAlertHistory();
+            const filterKey = group.dataset.filter;
+            const value = pill.dataset.value;
+            if (filterKey === 'rdp') {
+                rdpFilter = value;
+                fetchRdpLogins();
+            } else {
+                alertFilter[filterKey] = value;
+                alertPage.offset = 0;
+                fetchAlertHistory();
+            }
         });
     });
 
@@ -108,6 +115,11 @@ function switchView(name) {
     } else if (alertRefreshTimer) {
         clearInterval(alertRefreshTimer);
         alertRefreshTimer = null;
+    }
+
+    if (name === 'security') {
+        fetchSecurityStatus();
+        fetchRdpLogins();
     }
 }
 
@@ -181,6 +193,157 @@ function renderAlertHistory(data) {
         pag.style.display = 'none';
     }
 }
+
+// ── Security view ───────────────────────────────────────────────────────────
+
+let rdpFilter = 'all';
+
+function setSecValue(id, label, level, subText) {
+    const el = document.getElementById(id);
+    const sub = document.getElementById(id + 'Sub');
+    if (el) {
+        el.textContent = label;
+        el.className = 'sec-value ' + (level ? 'is-' + level : 'is-unknown');
+    }
+    if (sub && subText !== undefined) sub.textContent = subText;
+}
+
+function fetchSecurityStatus() {
+    fetch('/api/security/status')
+        .then(r => r.json())
+        .then(d => renderSecurityStatus(d))
+        .catch(() => {});
+}
+
+function renderSecurityStatus(d) {
+    if (!d || !d.ts) {
+        ['secFirewall','secDefender','secBitlocker','secUac','secFailed','secUpdates']
+            .forEach(id => setSecValue(id, 'Scanning…', null, ''));
+        return;
+    }
+
+    // Firewall
+    const fw = [
+        ['Domain',  d.firewall_domain],
+        ['Private', d.firewall_private],
+        ['Public',  d.firewall_public],
+    ];
+    const onCount = fw.filter(([, v]) => v === 1).length;
+    const offProfs = fw.filter(([, v]) => v === 0).map(([n]) => n);
+    let fwLabel, fwLevel, fwSub;
+    if (onCount === 3)      { fwLabel = 'All Enabled';        fwLevel = 'ok';   fwSub = 'Domain / Private / Public'; }
+    else if (onCount === 0) { fwLabel = 'All Disabled';       fwLevel = 'crit'; fwSub = 'All three profiles are off'; }
+    else                    { fwLabel = `${onCount} of 3 On`; fwLevel = 'warn'; fwSub = 'Off: ' + offProfs.join(', '); }
+    setSecValue('secFirewall', fwLabel, fwLevel, fwSub);
+
+    // Defender
+    if (d.defender_realtime === 1) {
+        const age = d.defender_signature_age_days;
+        let level = 'ok', sub = '';
+        if (age == null) sub = 'engine ' + (d.defender_engine_version || '');
+        else if (age > 7) { level = 'warn'; sub = `signatures ${age.toFixed(1)}d old`; }
+        else              { sub = `signatures ${age.toFixed(1)}d old`; }
+        setSecValue('secDefender', 'Real-time On', level, sub);
+    } else if (d.defender_realtime === 0) {
+        setSecValue('secDefender', 'Off',  'crit', 'Real-time protection disabled');
+    } else {
+        setSecValue('secDefender', 'Unknown', 'unknown', '');
+    }
+
+    // BitLocker
+    const bl = d.bitlocker_status || '';
+    let blLevel = 'unknown';
+    if (bl.startsWith('On'))           blLevel = 'ok';
+    else if (bl.startsWith('Off'))     blLevel = 'warn';
+    else if (bl.startsWith('Mixed'))   blLevel = 'warn';
+    else if (bl === 'None')            blLevel = 'info';
+    setSecValue('secBitlocker', bl || '--', blLevel, '');
+
+    // UAC
+    if (d.uac_enabled === 1)      setSecValue('secUac', 'Enabled',  'ok',   'EnableLUA = 1');
+    else if (d.uac_enabled === 0) setSecValue('secUac', 'Disabled', 'crit', 'EnableLUA = 0');
+    else                           setSecValue('secUac', 'Unknown',  'unknown', '');
+
+    // Failed logins
+    const fl = d.failed_logins_24h;
+    if (fl == null) {
+        setSecValue('secFailed', '—', 'unknown', '');
+    } else if (fl >= 50) {
+        setSecValue('secFailed', String(fl), 'crit', 'Possible brute-force');
+    } else if (fl >= 10) {
+        setSecValue('secFailed', String(fl), 'warn', 'Elevated activity');
+    } else {
+        setSecValue('secFailed', String(fl), 'ok',   'Normal');
+    }
+
+    // Pending updates
+    const up = d.updates_pending;
+    if (up == null)        setSecValue('secUpdates', '—',         'unknown', '');
+    else if (up === 0)     setSecValue('secUpdates', 'None',      'ok',      'System is up to date');
+    else                    setSecValue('secUpdates', String(up),  'warn',    'Run Windows Update');
+
+    renderFindings(d.findings || []);
+}
+
+function renderFindings(findings) {
+    const list = document.getElementById('findingsList');
+    document.getElementById('findingsCount').textContent = findings.length;
+    if (!findings.length) {
+        list.innerHTML = '<div class="no-events">No findings</div>';
+        return;
+    }
+    const order = { high: 0, medium: 1, info: 2, ok: 3 };
+    findings.sort((a, b) => (order[a.severity] ?? 9) - (order[b.severity] ?? 9));
+    list.innerHTML = findings.map(f => `
+        <div class="finding">
+            <span class="finding-sev ${escapeHtml(f.severity || 'info')}">${escapeHtml((f.severity || 'info').toUpperCase())}</span>
+            <div class="finding-body">
+                <div class="finding-title">${escapeHtml(f.title || '')}</div>
+                <div class="finding-detail">${escapeHtml(f.detail || '')}</div>
+            </div>
+        </div>
+    `).join('');
+}
+
+function fetchRdpLogins() {
+    const p = new URLSearchParams({ status: rdpFilter, limit: 200 });
+    fetch('/api/security/rdp?' + p)
+        .then(r => r.json())
+        .then(d => renderRdpLogins(d))
+        .catch(() => {});
+}
+
+function renderRdpLogins(data) {
+    const body = document.getElementById('rdpLoginBody');
+    const total = data.total || 0;
+    const rows = data.rows || [];
+    document.getElementById('rdpCount').textContent = total;
+
+    if (rows.length === 0) {
+        body.innerHTML = '<tr><td colspan="5" class="no-events">No RDP login activity in the lookback window</td></tr>';
+        document.getElementById('rdpSummary').textContent = '0 of 0';
+        return;
+    }
+
+    body.innerHTML = rows.map(r => {
+        const success = r.success === 1;
+        const cls = success ? 'cleared' : 'active';   // reuse pill colors
+        const label = success ? 'SUCCESS' : 'FAILED';
+        const sevCls = success ? 'ok' : 'high';
+        return `
+            <tr>
+                <td><span class="finding-sev ${sevCls}">${label}</span></td>
+                <td class="col-raised">${formatDateTimeFull(r.ts_event)}</td>
+                <td class="col-target">${escapeHtml((r.domain ? r.domain + '\\\\' : '') + (r.username || ''))}</td>
+                <td>${escapeHtml(r.source_ip || '—')}</td>
+                <td>${escapeHtml(r.workstation || '—')}</td>
+            </tr>
+        `;
+    }).join('');
+    document.getElementById('rdpSummary').textContent = `Showing 1–${rows.length} of ${total}`;
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
 
 function formatDateTimeFull(epoch) {
     const d = new Date(epoch * 1000);
@@ -337,6 +500,21 @@ function updateHostCards(host) {
     setKpiValue('hostCpuVal', m.cpu_pct, '%');
     setKpiValue('hostMemVal', m.mem_pct, '%');
 
+    // Memory: also show "X.X GB free / Y GB total"
+    const memSub = document.getElementById('hostMemSub');
+    if (memSub) {
+        if (m.mem_total && m.mem_avail != null) {
+            const freeGB  = (m.mem_avail / (1024 ** 3)).toFixed(1);
+            const totalGB = (m.mem_total / (1024 ** 3)).toFixed(0);
+            memSub.textContent = `${freeGB} GB free of ${totalGB} GB`;
+        } else if (m.mem_avail != null) {
+            const freeGB = (m.mem_avail / (1024 ** 3)).toFixed(1);
+            memSub.textContent = `${freeGB} GB free`;
+        } else {
+            memSub.textContent = '';
+        }
+    }
+
     document.getElementById('hostDiskReadVal').innerHTML  = formatRateHtml(m.disk_read_bps);
     document.getElementById('hostDiskWriteVal').innerHTML = formatRateHtml(m.disk_write_bps);
 
@@ -387,9 +565,12 @@ function updateVolumes(volumes) {
         const fillClass = pct >= 95 ? 'crit' : pct >= 85 ? 'warn' : '';
         const usedGB = ((v.total - v.free) / 1e9).toFixed(0);
         const totalGB = (v.total / 1e9).toFixed(0);
+        const labelText = v.label && v.label.trim()
+            ? `${v.drive}: <span class="vol-name">${escapeHtml(v.label)}</span>`
+            : `${v.drive}:`;
         return `
             <div class="volume-row">
-                <span class="volume-label">${v.drive}:</span>
+                <span class="volume-label">${labelText}</span>
                 <div class="volume-bar-bg">
                     <div class="volume-bar-fill ${fillClass}" style="width:${pct}%"></div>
                 </div>
@@ -405,7 +586,17 @@ function updateVolumes(volumes) {
 function updateVmGrid(vms) {
     const grid = document.getElementById('vmGrid');
     const countEl = document.getElementById('vmCount');
-    if (countEl) countEl.textContent = vms && vms.length ? vms.length : '';
+    const navBadge = document.getElementById('navVmCount');
+    const count = vms ? vms.length : 0;
+    if (countEl) countEl.textContent = count;
+    if (navBadge) {
+        if (count > 0) {
+            navBadge.textContent = count;
+            navBadge.style.display = 'inline-flex';
+        } else {
+            navBadge.style.display = 'none';
+        }
+    }
 
     if (!vms || vms.length === 0) {
         if (grid.children.length === 0) {

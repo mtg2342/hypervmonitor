@@ -211,6 +211,27 @@ if (-not $existingTask) {
     }
 }
 
+# ── Optional: daily auto-update from GitHub ─────────────────────────────────
+$AUTO_UPDATE_TASK = 'HyperVMonitorAutoUpdate'
+$existingAuto = Get-ScheduledTask -TaskName $AUTO_UPDATE_TASK -ErrorAction SilentlyContinue
+if (-not $existingAuto) {
+    Write-Host ''
+    Write-Host 'Auto-update will check GitHub once a day at 3:30 AM and reapply if'
+    Write-Host 'changes are available. Runs the same deploy.ps1 you just used.'
+    $r = Read-Host 'Enable daily auto-update at 3:30 AM? (Y/n)'
+    if ($r -ne 'n') {
+        $autoCmd  = "iex (irm $RAW_SCRIPT)"
+        $autoArg  = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command `"$autoCmd`""
+        $autoAction    = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $autoArg
+        $autoTrigger   = New-ScheduledTaskTrigger -Daily -At 3:30am
+        $autoPrincipal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+        $autoSettings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
+        Register-ScheduledTask -TaskName $AUTO_UPDATE_TASK -Action $autoAction -Trigger $autoTrigger -Principal $autoPrincipal -Settings $autoSettings -Force | Out-Null
+        Write-Host "Scheduled task '$AUTO_UPDATE_TASK' created. Runs daily at 3:30 AM as SYSTEM." -ForegroundColor Green
+        Write-Host "To disable later: Unregister-ScheduledTask -TaskName '$AUTO_UPDATE_TASK' -Confirm:`$false" -ForegroundColor DarkGray
+    }
+}
+
 Write-Section 'Done'
 Write-Host "Installed at:  $path"
 Write-Host "Dashboard URL: http://127.0.0.1:5000"

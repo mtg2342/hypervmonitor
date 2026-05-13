@@ -231,6 +231,60 @@ def system_updates():
         conn.close()
 
 
+@app.route("/api/security/status")
+def security_status():
+    import json as _json
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT * FROM security_status WHERE id=1").fetchone()
+        sysinfo = conn.execute(
+            "SELECT updates_pending FROM system_info WHERE id=1"
+        ).fetchone()
+        d = dict(row) if row else {}
+        try:
+            d["findings"] = _json.loads(d.get("findings_json") or "[]")
+        except Exception:
+            d["findings"] = []
+        d.pop("findings_json", None)
+        d["updates_pending"] = (sysinfo["updates_pending"] if sysinfo else None)
+        return jsonify(d)
+    finally:
+        conn.close()
+
+
+@app.route("/api/security/rdp")
+def security_rdp():
+    """RDP login history. Query: status=all|success|failed, limit, offset."""
+    status = (request.args.get("status", "all") or "all").lower()
+    limit  = min(request.args.get("limit", 200, type=int), 2000)
+    offset = max(request.args.get("offset",  0, type=int), 0)
+
+    where = []
+    if status == "success":
+        where.append("success = 1")
+    elif status == "failed":
+        where.append("success = 0")
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            f"SELECT * FROM rdp_logins {where_sql} ORDER BY ts_event DESC LIMIT ? OFFSET ?",
+            (limit, offset),
+        ).fetchall()
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM rdp_logins {where_sql}"
+        ).fetchone()[0]
+        return jsonify({
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "rows": _rows_to_dicts(rows),
+        })
+    finally:
+        conn.close()
+
+
 @app.route("/api/alerts/active")
 def alerts_active():
     conn = get_connection()

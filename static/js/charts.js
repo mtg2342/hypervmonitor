@@ -335,7 +335,7 @@ function buildStorageChart(ctx) {
 
                     if (host.volumes) {
                         for (const v of host.volumes) {
-                            labels.push(v.drive + ':');
+                            labels.push(v.drive + ':' + (v.label && v.label.trim() ? ' ' + v.label : ''));
                             usedData.push(bytesToGB(v.total - v.free));
                             freeData.push(bytesToGB(v.free));
                         }

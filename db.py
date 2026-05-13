@@ -181,6 +181,42 @@ def init_db(db_path=None):
         )
     """)
 
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS security_status (
+            id                          INTEGER PRIMARY KEY CHECK (id = 1),
+            ts                          REAL,
+            firewall_domain             INTEGER,
+            firewall_private            INTEGER,
+            firewall_public             INTEGER,
+            defender_realtime           INTEGER,
+            defender_antivirus_enabled  INTEGER,
+            defender_signature_age_days REAL,
+            defender_engine_version     TEXT,
+            bitlocker_status            TEXT,
+            uac_enabled                 INTEGER,
+            failed_logins_24h           INTEGER,
+            rdp_success_24h             INTEGER,
+            admin_count                 INTEGER,
+            findings_json               TEXT
+        )
+    """)
+    c.execute("INSERT OR IGNORE INTO security_status (id) VALUES (1)")
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS rdp_logins (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts_event    REAL NOT NULL,
+            username    TEXT,
+            domain      TEXT,
+            source_ip   TEXT,
+            workstation TEXT,
+            logon_type  INTEGER,
+            success     INTEGER NOT NULL,
+            UNIQUE(ts_event, username, source_ip, success)
+        )
+    """)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_rdp_ts ON rdp_logins(ts_event)")
+
     conn.commit()
     conn.close()
     logger.info("Database initialized at %s", db_path or DB_PATH)
@@ -212,6 +248,10 @@ def purge_old_data(conn):
         total_deleted += conn.execute("SELECT changes()").fetchone()[0]
 
     conn.execute("DELETE FROM system_events WHERE ts_event < ?", (events_cutoff,))
+    total_deleted += conn.execute("SELECT changes()").fetchone()[0]
+
+    rdp_cutoff = now - (180 * 86400)  # keep 180 days of RDP logins
+    conn.execute("DELETE FROM rdp_logins WHERE ts_event < ?", (rdp_cutoff,))
     total_deleted += conn.execute("SELECT changes()").fetchone()[0]
 
     conn.execute(

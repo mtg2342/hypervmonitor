@@ -7,7 +7,8 @@ from db import get_connection, purge_old_data, rollup_aggregates
 from config import (
     POLL_INTERVAL, VHD_POLL_MULTIPLE, PURGE_CHECK_MULTIPLE,
     SYSINFO_POLL_MULTIPLE, EVENTLOG_POLL_MULTIPLE, UPDATES_POLL_MULTIPLE,
-    ROLLUP_POLL_MULTIPLE,
+    ROLLUP_POLL_MULTIPLE, SECURITY_POLL_MULTIPLE,
+    RDP_LOOKBACK_DAYS, RDP_MAX_EVENTS,
     EVENTLOG_LOOKBACK_HOURS, EVENTLOG_MAX_EVENTS,
 )
 
@@ -44,6 +45,31 @@ def _ensure_list(data):
     return data
 
 
+def _match_vm_to_instance(instance, vm_lc_to_orig):
+    """Map a Hyper-V counter InstanceName to a VM name.
+
+    Counter instance names vary by Hyper-V version. Typical forms:
+      - 'VMName_<AdapterGUID>'           (Virtual Network Adapter)
+      - 'VMName Network Adapter'         (Virtual Network Adapter)
+      - 'VMName-<DiskName>'              (Virtual Storage Device, dynamic VHDX)
+      - 'VMName_<GUID>'                  (Virtual Storage Device)
+      - '<GUID>'                         (raw GUID — unmappable)
+
+    Strategy: longest VM-name prefix or substring match against the instance.
+    """
+    if not instance:
+        return None
+    inst = instance.lower()
+    best = None
+    best_len = 0
+    for vm_lc, vm_orig in vm_lc_to_orig.items():
+        if vm_lc and (inst.startswith(vm_lc) or vm_lc in inst):
+            if len(vm_lc) > best_len:
+                best = vm_orig
+                best_len = len(vm_lc)
+    return best
+
+
 class MetricCollector:
     def __init__(self, db_path=None):
         self.db_path = db_path
@@ -74,6 +100,9 @@ class MetricCollector:
                 self._collect_system_info(conn, ts)
             if self._poll_count == 1 or self._poll_count % EVENTLOG_POLL_MULTIPLE == 0:
                 self._collect_event_logs(conn, ts)
+            if self._poll_count == 1 or self._poll_count % SECURITY_POLL_MULTIPLE == 0:
+                self._collect_security(conn, ts)
+                self._collect_rdp_logins(conn, ts)
             if self._poll_count % VHD_POLL_MULTIPLE == 0:
                 self._collect_vhd(conn, ts)
             if self._poll_count == 1 or self._poll_count % UPDATES_POLL_MULTIPLE == 0:
@@ -88,53 +117,28 @@ class MetricCollector:
         logger.debug("Poll #%d completed in %.1fs", self._poll_count, time.time() - ts)
 
     def _collect_vm_and_network(self, conn, ts):
-        script = (
-            "$vms = Get-VM | Select-Object Name, State, CPUUsage, MemoryAssigned, "
-            "MemoryDemand, @{N='UptimeSec';E={$_.Uptime.TotalSeconds}}, "
-            "@{N='Heartbeat';E={if($_.Heartbeat){$_.Heartbeat.ToString()}else{'N/A'}}}\n"
-            "$adapters = Get-VMNetworkAdapter -VM (Get-VM) -ErrorAction SilentlyContinue | "
-            "Select-Object VMName, Name, "
-            "@{N='SentBytes';E={if($_.BytesSent){$_.BytesSent}else{0}}}, "
-            "@{N='RecvBytes';E={if($_.BytesReceived){$_.BytesReceived}else{0}}}\n"
-            "@{VMs=$vms; Adapters=$adapters} | ConvertTo-Json -Depth 3 -Compress"
+        # Step 1: VM basic info via Get-VM. Heartbeat is wrapped in try/catch
+        # because $_.Heartbeat can throw for VMs without integration services.
+        script_vm = (
+            "Get-VM | Select-Object Name, State, CPUUsage, MemoryAssigned, MemoryDemand, "
+            "@{N='UptimeSec';E={try{if($_.Uptime){$_.Uptime.TotalSeconds}else{0}}catch{0}}}, "
+            "@{N='Heartbeat';E={"
+            "try{"
+            "  if ($_.State -ne 'Running') {'N/A'}"
+            "  else { "
+            "    $h = $_.Heartbeat; "
+            "    if ($h -ne $null) { $h.ToString() } else { 'NoIntegration' }"
+            "  }"
+            "} catch { 'Unknown' }"
+            "}} | ConvertTo-Json -Compress -Depth 3"
         )
-        data = ps_json(script)
-        if not data:
+        vms = _ensure_list(ps_json(script_vm))
+        if not vms:
             return
 
-        vms = _ensure_list(data.get("VMs"))
-        adapters = _ensure_list(data.get("Adapters"))
-
-        adapter_by_vm = {}
-        for a in adapters:
-            vm_name = a.get("VMName", "")
-            key = (vm_name, a.get("Name", "default"))
-            sent = a.get("SentBytes", 0) or 0
-            recv = a.get("RecvBytes", 0) or 0
-
-            sent_bps = None
-            recv_bps = None
-            if key in self._prev_net:
-                prev_sent, prev_recv, prev_ts = self._prev_net[key]
-                elapsed = ts - prev_ts
-                if elapsed > 0:
-                    d_sent = sent - prev_sent
-                    d_recv = recv - prev_recv
-                    if d_sent < 0:
-                        d_sent = 0
-                    if d_recv < 0:
-                        d_recv = 0
-                    sent_bps = d_sent / elapsed
-                    recv_bps = d_recv / elapsed
-
-            self._prev_net[key] = (sent, recv, ts)
-
-            if vm_name not in adapter_by_vm:
-                adapter_by_vm[vm_name] = {"sent_bps": 0, "recv_bps": 0}
-            if sent_bps is not None:
-                adapter_by_vm[vm_name]["sent_bps"] += sent_bps
-                adapter_by_vm[vm_name]["recv_bps"] += recv_bps
-
+        # Build per-VM record map keyed by lowercase name for counter mapping
+        vm_data = {}
+        vm_lc_to_orig = {}
         for vm in vms:
             if not isinstance(vm, dict) or not vm.get("Name"):
                 continue
@@ -146,7 +150,54 @@ class MetricCollector:
             else:
                 state = str(state_val) if state_val else "Unknown"
 
-            net = adapter_by_vm.get(name, {})
+            vm_data[name] = {
+                "state": state,
+                "cpu_usage":      vm.get("CPUUsage"),
+                "mem_assigned":   vm.get("MemoryAssigned"),
+                "mem_demand":     vm.get("MemoryDemand"),
+                "uptime_sec":     vm.get("UptimeSec"),
+                "heartbeat":      vm.get("Heartbeat"),
+                "net_sent_bps":   0.0,
+                "net_recv_bps":   0.0,
+                "disk_read_bps":  0.0,
+                "disk_write_bps": 0.0,
+            }
+            vm_lc_to_orig[name.lower()] = name
+
+        # Step 2: All VM throughput counters in one Get-Counter call
+        script_perf = (
+            "try { "
+            "Get-Counter "
+            "'\\Hyper-V Virtual Network Adapter(*)\\Bytes Sent/sec',"
+            "'\\Hyper-V Virtual Network Adapter(*)\\Bytes Received/sec',"
+            "'\\Hyper-V Virtual Storage Device(*)\\Read Bytes/sec',"
+            "'\\Hyper-V Virtual Storage Device(*)\\Write Bytes/sec' "
+            "-SampleInterval 1 -MaxSamples 1 -ErrorAction Stop | "
+            "ForEach-Object { $_.CounterSamples } | "
+            "Select-Object Path, InstanceName, CookedValue | "
+            "ConvertTo-Json -Compress -Depth 3 "
+            "} catch { '[]' }"
+        )
+        samples = _ensure_list(ps_json(script_perf))
+
+        for s in samples:
+            instance = (s.get("InstanceName") or "").strip()
+            path     = (s.get("Path") or "").lower()
+            value    = s.get("CookedValue", 0) or 0
+            vm_name  = _match_vm_to_instance(instance, vm_lc_to_orig)
+            if not vm_name or vm_name not in vm_data:
+                continue
+            if "bytes sent/sec" in path:
+                vm_data[vm_name]["net_sent_bps"] += value
+            elif "bytes received/sec" in path:
+                vm_data[vm_name]["net_recv_bps"] += value
+            elif "read bytes/sec" in path:
+                vm_data[vm_name]["disk_read_bps"] += value
+            elif "write bytes/sec" in path:
+                vm_data[vm_name]["disk_write_bps"] += value
+
+        # Step 3: Insert
+        for name, d in vm_data.items():
             conn.execute(
                 """INSERT INTO vm_metrics
                    (ts, vm_name, state, cpu_usage, mem_assigned, mem_demand,
@@ -154,15 +205,13 @@ class MetricCollector:
                     disk_read_bps, disk_write_bps)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
-                    ts, name, state,
-                    vm.get("CPUUsage"),
-                    vm.get("MemoryAssigned"),
-                    vm.get("MemoryDemand"),
-                    vm.get("UptimeSec"),
-                    vm.get("Heartbeat"),
-                    net.get("sent_bps"),
-                    net.get("recv_bps"),
-                    None, None,
+                    ts, name, d["state"],
+                    d["cpu_usage"], d["mem_assigned"], d["mem_demand"],
+                    d["uptime_sec"], d["heartbeat"],
+                    d["net_sent_bps"] or None,
+                    d["net_recv_bps"] or None,
+                    d["disk_read_bps"] or None,
+                    d["disk_write_bps"] or None,
                 ),
             )
 
@@ -220,40 +269,6 @@ class MetricCollector:
                 vals.get("disk_w"),
             ),
         )
-
-        script_disk_io = (
-            "try { Get-Counter "
-            "'\\Hyper-V Virtual Storage Device(*)\\Read Bytes/sec',"
-            "'\\Hyper-V Virtual Storage Device(*)\\Write Bytes/sec' "
-            "-SampleInterval 1 -MaxSamples 1 -ErrorAction Stop | "
-            "ForEach-Object { $_.CounterSamples | Select-Object Path, InstanceName, CookedValue } | "
-            "ConvertTo-Json -Compress } catch { '[]' }"
-        )
-        disk_data = _ensure_list(ps_json(script_disk_io))
-        if not disk_data:
-            return
-
-        vm_disk = {}
-        for sample in disk_data:
-            instance = sample.get("InstanceName", "")
-            path = (sample.get("Path") or "").lower()
-            val = sample.get("CookedValue", 0)
-            vm_name = instance.split(":")[0] if ":" in instance else instance
-            if not vm_name or vm_name == "_total":
-                continue
-            if vm_name not in vm_disk:
-                vm_disk[vm_name] = {"read": 0, "write": 0}
-            if "read bytes" in path:
-                vm_disk[vm_name]["read"] += val
-            elif "write bytes" in path:
-                vm_disk[vm_name]["write"] += val
-
-        for vm_name, io in vm_disk.items():
-            conn.execute(
-                """UPDATE vm_metrics SET disk_read_bps=?, disk_write_bps=?
-                   WHERE ts=? AND vm_name=?""",
-                (io["read"], io["write"], ts, vm_name),
-            )
 
     def _collect_volumes(self, conn, ts):
         script = (
@@ -462,3 +477,235 @@ class MetricCollector:
             (len(data), ts),
         )
         logger.info("Found %d pending Windows updates", len(data))
+
+    # ── Security ─────────────────────────────────────────────────────────────
+
+    def _collect_security(self, conn, ts):
+        """Collect Windows security posture: firewall, Defender, BitLocker, UAC."""
+        # Note: all statements separated by semicolons because powershell.exe -Command
+        # treats the script as a single line. Missing semicolons cause parser errors.
+        script = (
+            "$result = @{}; "
+            "try { "
+            "  $fw = Get-NetFirewallProfile -ErrorAction Stop; "
+            "  foreach ($p in $fw) { $result[\"Firewall_$($p.Name)\"] = [int]$p.Enabled }; "
+            "} catch { $result['Firewall_Error'] = $_.Exception.Message }; "
+            "try { "
+            "  $d = Get-MpComputerStatus -ErrorAction Stop; "
+            "  $result['Defender_Realtime'] = [int]$d.RealTimeProtectionEnabled; "
+            "  $result['Defender_AVEnabled'] = [int]$d.AntivirusEnabled; "
+            "  $result['Defender_EngineVersion'] = if ($d.AMEngineVersion) { $d.AMEngineVersion.ToString() } else { '' }; "
+            "  if ($d.AntivirusSignatureLastUpdated) { "
+            "    $result['Defender_SigDate'] = ((Get-Date) - $d.AntivirusSignatureLastUpdated).TotalDays "
+            "  } else { $result['Defender_SigDate'] = -1 }; "
+            "} catch { $result['Defender_Error'] = $_.Exception.Message }; "
+            "try { "
+            "  $bl = @(Get-BitLockerVolume -ErrorAction Stop); "
+            "  $on  = @($bl | Where-Object { $_.ProtectionStatus -eq 'On' }).Count; "
+            "  $off = @($bl | Where-Object { $_.ProtectionStatus -eq 'Off' }).Count; "
+            "  if ($bl.Count -eq 0) { $result['BitLocker'] = 'None' } "
+            "  elseif ($off -eq 0)   { $result['BitLocker'] = \"On ($on vols)\" } "
+            "  elseif ($on -eq 0)    { $result['BitLocker'] = \"Off ($off vols)\" } "
+            "  else                  { $result['BitLocker'] = \"Mixed ($on on / $off off)\" }; "
+            "} catch { $result['BitLocker'] = 'NotAvailable' }; "
+            "try { "
+            "  $uac = (Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' -Name EnableLUA -ErrorAction Stop).EnableLUA; "
+            "  $result['UAC'] = [int]$uac; "
+            "} catch { $result['UAC'] = -1 }; "
+            "try { "
+            "  $admins = @(Get-LocalGroupMember -Group 'Administrators' -ErrorAction Stop); "
+            "  $result['AdminCount'] = $admins.Count; "
+            "} catch { $result['AdminCount'] = -1 }; "
+            "try { "
+            "  $cut = (Get-Date).AddHours(-24); "
+            "  $failed = @(Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4625; StartTime=$cut} -ErrorAction SilentlyContinue); "
+            "  $result['FailedLogins24h'] = $failed.Count; "
+            "} catch { $result['FailedLogins24h'] = -1 }; "
+            "try { "
+            "  $cut = (Get-Date).AddHours(-24); "
+            "  $rdp = @(Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4624; StartTime=$cut} -ErrorAction SilentlyContinue | "
+            "          Where-Object { $_.Properties[8].Value -eq 10 }); "
+            "  $result['RdpSuccess24h'] = $rdp.Count; "
+            "} catch { $result['RdpSuccess24h'] = -1 }; "
+            "$result | ConvertTo-Json -Compress -Depth 3"
+        )
+        data = ps_json(script, timeout=45)
+        if not isinstance(data, dict):
+            return
+
+        firewall_domain  = data.get("Firewall_Domain")
+        firewall_private = data.get("Firewall_Private")
+        firewall_public  = data.get("Firewall_Public")
+        defender_rt      = data.get("Defender_Realtime")
+        defender_av      = data.get("Defender_AVEnabled")
+        defender_eng     = data.get("Defender_EngineVersion")
+        defender_sigage  = data.get("Defender_SigDate")
+        if defender_sigage == -1:
+            defender_sigage = None
+        bitlocker        = data.get("BitLocker", "Unknown")
+        uac              = data.get("UAC", -1)
+        admin_count      = data.get("AdminCount", -1)
+        failed_24h       = data.get("FailedLogins24h", -1)
+        rdp_24h          = data.get("RdpSuccess24h", -1)
+
+        findings = self._evaluate_security_findings(data)
+        findings_json = json.dumps(findings)
+
+        conn.execute(
+            """UPDATE security_status SET
+                ts=?,
+                firewall_domain=?, firewall_private=?, firewall_public=?,
+                defender_realtime=?, defender_antivirus_enabled=?,
+                defender_signature_age_days=?, defender_engine_version=?,
+                bitlocker_status=?, uac_enabled=?,
+                failed_logins_24h=?, rdp_success_24h=?, admin_count=?,
+                findings_json=?
+               WHERE id=1""",
+            (
+                ts,
+                firewall_domain, firewall_private, firewall_public,
+                defender_rt, defender_av,
+                defender_sigage, defender_eng,
+                bitlocker, uac if uac != -1 else None,
+                failed_24h if failed_24h != -1 else None,
+                rdp_24h if rdp_24h != -1 else None,
+                admin_count if admin_count != -1 else None,
+                findings_json,
+            ),
+        )
+        logger.info(
+            "Security: firewall(D/P/Pub)=%s/%s/%s, defender_rt=%s, bitlocker=%s, failed_24h=%s, rdp_24h=%s, findings=%d",
+            firewall_domain, firewall_private, firewall_public,
+            defender_rt, bitlocker, failed_24h, rdp_24h, len(findings),
+        )
+
+    def _evaluate_security_findings(self, data):
+        """Turn raw security data into a list of human-readable findings."""
+        findings = []
+        for prof in ("Domain", "Private", "Public"):
+            val = data.get(f"Firewall_{prof}")
+            if val == 0:
+                findings.append({
+                    "severity": "high",
+                    "title": f"{prof} Firewall profile is disabled",
+                    "detail": "Re-enable in Windows Security > Firewall & network protection.",
+                })
+
+        if data.get("Defender_Realtime") == 0:
+            findings.append({
+                "severity": "high",
+                "title": "Microsoft Defender real-time protection is off",
+                "detail": "Run: Set-MpPreference -DisableRealtimeMonitoring $false",
+            })
+        sig_age = data.get("Defender_SigDate")
+        if isinstance(sig_age, (int, float)) and sig_age > 7:
+            findings.append({
+                "severity": "medium",
+                "title": f"Defender signatures are {sig_age:.1f} days old",
+                "detail": "Update signatures: Update-MpSignature  (or via Windows Update)",
+            })
+
+        uac = data.get("UAC")
+        if uac == 0:
+            findings.append({
+                "severity": "high",
+                "title": "UAC (User Account Control) is disabled",
+                "detail": "Set EnableLUA=1 in HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System and reboot.",
+            })
+
+        bitlocker = data.get("BitLocker", "")
+        if bitlocker.startswith("Off"):
+            findings.append({
+                "severity": "medium",
+                "title": "BitLocker is not enabled on any volume",
+                "detail": "Encrypting the system drive protects data if the host disks are removed.",
+            })
+
+        admin_count = data.get("AdminCount", -1)
+        if isinstance(admin_count, int) and admin_count > 3:
+            findings.append({
+                "severity": "info",
+                "title": f"{admin_count} accounts are in the local Administrators group",
+                "detail": "Review: Get-LocalGroupMember -Group Administrators",
+            })
+
+        failed_24h = data.get("FailedLogins24h", -1)
+        if isinstance(failed_24h, int):
+            if failed_24h >= 50:
+                findings.append({
+                    "severity": "high",
+                    "title": f"{failed_24h} failed login attempts in the last 24h",
+                    "detail": "Possible brute-force activity. Review event ID 4625 in the Security log.",
+                })
+            elif failed_24h >= 10:
+                findings.append({
+                    "severity": "medium",
+                    "title": f"{failed_24h} failed login attempts in the last 24h",
+                    "detail": "Worth a quick look — review event ID 4625 in the Security log.",
+                })
+
+        if not findings:
+            findings.append({
+                "severity": "ok",
+                "title": "No security issues detected",
+                "detail": "Firewall, Defender, UAC, and login activity all look normal.",
+            })
+        return findings
+
+    def _collect_rdp_logins(self, conn, ts):
+        """Scan Security event log for RDP logon events (4624/4625 with LogonType 10)."""
+        script = (
+            f"$cut = (Get-Date).AddDays(-{RDP_LOOKBACK_DAYS}); "
+            "$results = @(); "
+            "foreach ($id in @(4624, 4625)) { "
+            "  try { "
+            "    $events = Get-WinEvent -FilterHashtable @{LogName='Security'; Id=$id; StartTime=$cut} "
+            f"      -MaxEvents {RDP_MAX_EVENTS} -ErrorAction SilentlyContinue; "
+            "    foreach ($e in $events) { "
+            "      try { "
+            "        $lt = $e.Properties[8].Value; "
+            "        if ($lt -ne 10) { continue }; "
+            "        $results += [PSCustomObject]@{ "
+            "          TsEpoch     = [int][DateTimeOffset]::new($e.TimeCreated).ToUnixTimeSeconds(); "
+            "          Username    = $e.Properties[5].Value; "
+            "          Domain      = $e.Properties[6].Value; "
+            "          SourceIP    = $e.Properties[18].Value; "
+            "          Workstation = $e.Properties[11].Value; "
+            "          LogonType   = $lt; "
+            "          Success     = if ($e.Id -eq 4624) { 1 } else { 0 } "
+            "        } "
+            "      } catch { continue } "
+            "    } "
+            "  } catch { } "
+            "} "
+            "$results | ConvertTo-Json -Compress -Depth 3"
+        )
+        events = _ensure_list(ps_json(script, timeout=60))
+        inserted = 0
+        for e in events:
+            if not isinstance(e, dict):
+                continue
+            ts_event = e.get("TsEpoch")
+            if not ts_event:
+                continue
+            try:
+                conn.execute(
+                    """INSERT OR IGNORE INTO rdp_logins
+                       (ts_event, username, domain, source_ip, workstation, logon_type, success)
+                       VALUES (?,?,?,?,?,?,?)""",
+                    (
+                        ts_event,
+                        e.get("Username", ""),
+                        e.get("Domain", ""),
+                        e.get("SourceIP", ""),
+                        e.get("Workstation", ""),
+                        e.get("LogonType", 10),
+                        1 if e.get("Success") else 0,
+                    ),
+                )
+                if conn.execute("SELECT changes()").fetchone()[0] > 0:
+                    inserted += 1
+            except Exception:
+                logger.exception("Failed to insert RDP login event")
+        if inserted:
+            logger.info("Collected %d new RDP login events", inserted)

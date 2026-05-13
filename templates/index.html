@@ -14,6 +14,11 @@
         <h1>Hyper-V Monitor</h1>
         <nav class="main-nav" id="mainNav">
             <button class="nav-btn active" data-view="dashboard">Dashboard</button>
+            <button class="nav-btn" data-view="vms">
+                VMs
+                <span class="nav-badge nav-badge-info" id="navVmCount" style="display:none;">0</span>
+            </button>
+            <button class="nav-btn" data-view="security">Security</button>
             <button class="nav-btn" data-view="alerts">
                 Alert History
                 <span class="nav-badge" id="navAlertCount" style="display:none;">0</span>
@@ -46,6 +51,7 @@
             <div class="card host-card" id="hostMem">
                 <div class="card-label">Memory</div>
                 <div class="card-value" id="hostMemVal">--<span style="font-size:16px;color:var(--text-3)">%</span></div>
+                <div class="card-sub" id="hostMemSub">--</div>
                 <canvas class="sparkline" id="sparkHostMem" width="220" height="32"></canvas>
             </div>
             <div class="card host-card" id="hostDiskIo">
@@ -113,10 +119,6 @@
                 </div>
             </div>
         </section>
-
-        <!-- VMs -->
-        <div class="section-title" id="vmSectionTitle">Virtual Machines<span class="count" id="vmCount"></span></div>
-        <section class="vm-grid" id="vmGrid"></section>
 
         <!-- Detail charts -->
         <div class="section-title">Time Series</div>
@@ -189,6 +191,98 @@
             </div>
         </section>
       </div><!-- /view-alerts -->
+
+      <!-- ───────────────────────── VMs View ───────────────────────── -->
+      <div id="view-vms" class="view">
+        <div class="section-title">
+            Virtual Machines
+            <span class="count" id="vmCount">0</span>
+        </div>
+        <section class="vm-grid" id="vmGrid"></section>
+      </div><!-- /view-vms -->
+
+      <!-- ───────────────────────── Security View ───────────────────────── -->
+      <div id="view-security" class="view">
+        <div class="section-title">Security</div>
+
+        <section class="security-summary" id="securitySummary">
+            <div class="card sec-card" data-id="firewall">
+                <div class="card-label">Windows Firewall</div>
+                <div class="sec-value" id="secFirewall">--</div>
+                <div class="card-sub" id="secFirewallSub">--</div>
+            </div>
+            <div class="card sec-card" data-id="defender">
+                <div class="card-label">Microsoft Defender</div>
+                <div class="sec-value" id="secDefender">--</div>
+                <div class="card-sub" id="secDefenderSub">--</div>
+            </div>
+            <div class="card sec-card" data-id="bitlocker">
+                <div class="card-label">BitLocker</div>
+                <div class="sec-value" id="secBitlocker">--</div>
+                <div class="card-sub" id="secBitlockerSub">--</div>
+            </div>
+            <div class="card sec-card" data-id="uac">
+                <div class="card-label">UAC</div>
+                <div class="sec-value" id="secUac">--</div>
+                <div class="card-sub" id="secUacSub">--</div>
+            </div>
+            <div class="card sec-card" data-id="failed">
+                <div class="card-label">Failed Logins (24h)</div>
+                <div class="sec-value" id="secFailed">--</div>
+                <div class="card-sub" id="secFailedSub">via Security log</div>
+            </div>
+            <div class="card sec-card" data-id="updates">
+                <div class="card-label">Pending Updates</div>
+                <div class="sec-value" id="secUpdates">--</div>
+                <div class="card-sub" id="secUpdatesSub">from Windows Update</div>
+            </div>
+        </section>
+
+        <div class="section-title">
+            Findings
+            <span class="count" id="findingsCount">0</span>
+        </div>
+        <section class="card findings-card">
+            <div id="findingsList">
+                <div class="no-events">Scanning…</div>
+            </div>
+        </section>
+
+        <div class="section-title">
+            RDP Login History
+            <span class="count" id="rdpCount">0</span>
+        </div>
+        <section class="card alert-history-card">
+            <div class="alert-filters">
+                <div class="filter-group">
+                    <label>Show</label>
+                    <div class="filter-pills" data-filter="rdp">
+                        <button class="pill active" data-value="all">All</button>
+                        <button class="pill" data-value="success">Successful</button>
+                        <button class="pill" data-value="failed">Failed</button>
+                    </div>
+                </div>
+                <div class="filter-spacer"></div>
+                <span class="filter-summary" id="rdpSummary">—</span>
+            </div>
+            <div class="table-scroll">
+                <table class="alert-table">
+                    <thead>
+                        <tr>
+                            <th>Result</th>
+                            <th>When</th>
+                            <th>Username</th>
+                            <th>Source IP</th>
+                            <th>Workstation</th>
+                        </tr>
+                    </thead>
+                    <tbody id="rdpLoginBody">
+                        <tr><td colspan="5" class="no-events">Loading…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+      </div><!-- /view-security -->
     </main>
 
     <script src="/static/js/chart.umd.min.js"></script>
