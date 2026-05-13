@@ -837,13 +837,23 @@ function renderVeeam(d) {
 
     count.textContent = jobs.length;
 
+    // Veeam itself treats "Warning" runs as successful (its own UI shows a
+    // green check for them — the backup completed, it just emitted some
+    // non-critical notices). Merge those into the Success count for the
+    // summary pills so the dashboard doesn't disagree with Veeam.
     const c = d.counts || {};
-    const order = ['success', 'warning', 'failed', 'running', 'never'];
-    const labels = { success: 'Success', warning: 'Warning', failed: 'Failed', running: 'Running', never: 'Never Ran' };
+    const merged = {
+        success: (c.success || 0) + (c.warning || 0),
+        failed:   c.failed  || 0,
+        running:  c.running || 0,
+        never:    c.never   || 0,
+    };
+    const order = ['success', 'failed', 'running', 'never'];
+    const labels = { success: 'Success', failed: 'Failed', running: 'Running', never: 'Never Ran' };
     const pills = [];
     for (const k of order) {
-        if ((c[k] || 0) > 0) {
-            pills.push(`<span class="veeam-summary-pill ${k}"><span class="dot"></span>${c[k]} ${labels[k]}</span>`);
+        if ((merged[k] || 0) > 0) {
+            pills.push(`<span class="veeam-summary-pill ${k}"><span class="dot"></span>${merged[k]} ${labels[k]}</span>`);
         }
     }
     summary.innerHTML = pills.join('');
@@ -854,11 +864,24 @@ function renderVeeam(d) {
     }
 
     list.innerHTML = jobs.map(j => {
-        const result = (j.last_result || 'never').toLowerCase();
-        const cls = ['success', 'warning', 'failed', 'running'].includes(result) ? result : 'never';
-        const label = (j.last_result && j.last_result !== 'None' && j.last_result !== 'NeverRan')
-            ? j.last_result.toUpperCase()
-            : 'NEVER RAN';
+        const rawResult = (j.last_result || 'never').toLowerCase();
+        let displayResult = rawResult;
+        let label;
+        let warnedNote = '';   // shown next to the status pill if it was a "warning" run
+
+        if (rawResult === 'warning') {
+            // Re-classify as success for display purposes. Keep a small ⚠
+            // affordance + tooltip so the user can still see warnings happened.
+            displayResult = 'success';
+            label = 'SUCCESS';
+            warnedNote = ` <span class="veeam-job-warned" title="Veeam reported &quot;completed with warnings&quot; — the backup succeeded but emitted non-critical notices.">⚠</span>`;
+        } else if (j.last_result && j.last_result !== 'None' && j.last_result !== 'NeverRan') {
+            label = j.last_result.toUpperCase();
+        } else {
+            label = 'NEVER RAN';
+        }
+
+        const cls = ['success', 'failed', 'running'].includes(displayResult) ? displayResult : 'never';
         const when = j.last_end_ts ? formatRelativeTime(j.last_end_ts) : '—';
         const dur  = j.duration_sec ? formatDuration(j.duration_sec) : '—';
         return `
@@ -867,7 +890,7 @@ function renderVeeam(d) {
                     ${escapeHtml(j.job_name)}
                     ${j.job_type ? `<span class="veeam-type">${escapeHtml(j.job_type)}</span>` : ''}
                 </span>
-                <span class="veeam-job-result ${cls}">${label}</span>
+                <span class="veeam-job-result ${cls}">${label}${warnedNote}</span>
                 <span class="veeam-job-when" title="${j.last_end_ts ? new Date(j.last_end_ts * 1000).toLocaleString() : ''}">${when}</span>
                 <span class="veeam-job-dur">${dur}</span>
             </div>

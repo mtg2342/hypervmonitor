@@ -787,6 +787,14 @@ main {
 
 .veeam-job-result.success { background: var(--green-soft); color: var(--green); }
 .veeam-job-result.success::before { background: var(--green); }
+
+.veeam-job-warned {
+    margin-left: 4px;
+    color: var(--amber);
+    font-size: 11px;
+    cursor: help;
+    opacity: 0.9;
+}
 .veeam-job-result.warning { background: var(--amber-soft); color: var(--amber); }
 .veeam-job-result.warning::before { background: var(--amber); }
 .veeam-job-result.failed  { background: var(--red-soft); color: var(--red); }
