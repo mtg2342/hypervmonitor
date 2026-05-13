@@ -746,8 +746,32 @@ def _start_collector():
     alert_thread.start()
 
 
+def _quiet_werkzeug_request_logs():
+    """The dev server logs every request; cut it down to warnings+."""
+    logging.getLogger("werkzeug").setLevel(logging.WARNING)
+
+
 if __name__ == "__main__":
     init_db()
     _start_collector()
+    _quiet_werkzeug_request_logs()
     logger.info("Starting Hyper-V Monitor at http://%s:%d", FLASK_HOST, FLASK_PORT)
-    app.run(host=FLASK_HOST, port=FLASK_PORT, debug=False)
+
+    # Prefer waitress (production WSGI server, Windows-friendly, no warning spam).
+    # Fall back to Flask's dev server if waitress isn't installed yet — keeps
+    # the first run after a deps-upgrade working.
+    try:
+        from waitress import serve
+        logger.info("Using waitress WSGI server")
+        serve(
+            app,
+            host=FLASK_HOST,
+            port=FLASK_PORT,
+            threads=8,
+            ident="Hyper-V Monitor",
+            _quiet=True,
+        )
+    except ImportError:
+        logger.warning("waitress not installed; falling back to Flask dev server "
+                       "(run: pip install waitress)")
+        app.run(host=FLASK_HOST, port=FLASK_PORT, debug=False, threaded=True)
