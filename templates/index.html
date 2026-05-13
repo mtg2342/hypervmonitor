@@ -4,6 +4,18 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Hyper-V Monitor</title>
+    <script>
+        // Apply theme before the stylesheet loads, so the page doesn't flash
+        // the wrong palette on reload.
+        (function () {
+            try {
+                var t = localStorage.getItem('hvm-theme');
+                if (t === 'light' || t === 'dark') {
+                    document.documentElement.setAttribute('data-theme', t);
+                }
+            } catch (e) { /* localStorage disabled — fall back to dark */ }
+        })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -337,7 +349,7 @@
 
       <!-- ───────────────────────── Settings View ───────────────────────── -->
       <div id="view-settings" class="view">
-        <div class="section-title">Settings</div>
+        <div class="section-title">Alert Thresholds</div>
 
         <section class="card settings-card">
             <div class="settings-intro">
@@ -437,6 +449,30 @@
                 <div class="settings-spacer"></div>
                 <span class="settings-status" id="settingsStatus"></span>
                 <button class="btn-primary" id="settingsSave" disabled>Save Changes</button>
+            </div>
+        </section>
+
+        <div class="section-title">Appearance</div>
+        <section class="card appearance-card">
+            <div class="appearance-row">
+                <div class="appearance-text">
+                    <div class="appearance-title">Light theme</div>
+                    <div class="appearance-detail">A clean white &amp; blue palette that's easier to read in bright rooms. Stored in this browser only.</div>
+                </div>
+                <label class="toggle">
+                    <input type="checkbox" id="themeToggle">
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+
+            <div class="theme-preview" id="themePreview">
+                <div class="theme-preview-swatch swatch-bg"></div>
+                <div class="theme-preview-swatch swatch-card"></div>
+                <div class="theme-preview-swatch swatch-text"></div>
+                <div class="theme-preview-swatch swatch-accent"></div>
+                <div class="theme-preview-swatch swatch-green"></div>
+                <div class="theme-preview-swatch swatch-amber"></div>
+                <div class="theme-preview-swatch swatch-red"></div>
             </div>
         </section>
 

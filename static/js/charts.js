@@ -1,62 +1,74 @@
-const CHART_COLORS = [
-    '#5b9dff', '#3ddc97', '#f5b14a', '#ff6b6b',
-    '#a78bfa', '#56cfe1', '#ec98c5', '#fcd34d',
-];
+function _cssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
 
-const CHART_DEFAULTS = {
-    animation: false,
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-        legend: {
-            labels: {
-                color: '#9197ac',
-                font: { size: 11, family: 'Inter, system-ui, sans-serif' },
-                boxWidth: 12,
-                boxHeight: 12,
-                padding: 12,
-                usePointStyle: true,
-                pointStyle: 'circle',
-            }
-        },
-        tooltip: {
-            backgroundColor: 'rgba(17, 21, 31, 0.96)',
-            borderColor: '#1f2535',
-            borderWidth: 1,
-            titleColor: '#e6e9f2',
-            bodyColor: '#9197ac',
-            padding: 10,
-            cornerRadius: 6,
-            titleFont: { family: 'Inter, system-ui, sans-serif', size: 12, weight: '600' },
-            bodyFont: { family: 'Inter, system-ui, sans-serif', size: 11 },
-            displayColors: true,
-            boxPadding: 5,
-        },
-    },
-    scales: {
-        x: {
-            ticks: {
-                color: '#5d6378',
-                font: { size: 10, family: 'Inter, system-ui, sans-serif' },
-                maxTicksLimit: 10,
+let CHART_COLORS = [];
+let CHART_DEFAULTS = {};
+
+function refreshChartDefaults() {
+    const text2 = _cssVar('--text-2') || '#9197ac';
+    const text3 = _cssVar('--text-3') || '#5d6378';
+    const grid  = _cssVar('--grid')   || 'rgba(255,255,255,0.04)';
+    const cardBg = _cssVar('--bg-elev-1') || 'rgba(17, 21, 31, 0.96)';
+    const cardBorder = _cssVar('--border') || '#1f2535';
+    const textPrimary = _cssVar('--text') || '#e6e9f2';
+    const accent = _cssVar('--accent') || '#5b9dff';
+    const green  = _cssVar('--green')  || '#3ddc97';
+    const amber  = _cssVar('--amber')  || '#f5b14a';
+    const red    = _cssVar('--red')    || '#ff6b6b';
+    const purple = _cssVar('--purple') || '#a78bfa';
+
+    CHART_COLORS = [accent, green, amber, red, purple, '#56cfe1', '#ec98c5', '#fcd34d'];
+
+    CHART_DEFAULTS = {
+        animation: false,
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: {
+                labels: {
+                    color: text2,
+                    font: { size: 11, family: 'Inter, system-ui, sans-serif' },
+                    boxWidth: 12,
+                    boxHeight: 12,
+                    padding: 12,
+                    usePointStyle: true,
+                    pointStyle: 'circle',
+                }
             },
-            grid: { color: 'rgba(255,255,255,0.04)', drawBorder: false },
-            border: { display: false },
-        },
-        y: {
-            ticks: {
-                color: '#5d6378',
-                font: { size: 10, family: 'Inter, system-ui, sans-serif' },
+            tooltip: {
+                backgroundColor: cardBg,
+                borderColor: cardBorder,
+                borderWidth: 1,
+                titleColor: textPrimary,
+                bodyColor: text2,
+                padding: 10,
+                cornerRadius: 6,
+                titleFont: { family: 'Inter, system-ui, sans-serif', size: 12, weight: '600' },
+                bodyFont:  { family: 'Inter, system-ui, sans-serif', size: 11 },
+                displayColors: true,
+                boxPadding: 5,
             },
-            grid: { color: 'rgba(255,255,255,0.04)', drawBorder: false },
-            border: { display: false },
-            beginAtZero: true,
         },
-    },
-    elements: {
-        line: { borderJoinStyle: 'round', borderCapStyle: 'round' },
-    },
-};
+        scales: {
+            x: {
+                ticks: { color: text3, font: { size: 10, family: 'Inter, system-ui, sans-serif' }, maxTicksLimit: 10 },
+                grid:  { color: grid, drawBorder: false },
+                border: { display: false },
+            },
+            y: {
+                ticks: { color: text3, font: { size: 10, family: 'Inter, system-ui, sans-serif' } },
+                grid:  { color: grid, drawBorder: false },
+                border: { display: false },
+                beginAtZero: true,
+            },
+        },
+        elements: { line: { borderJoinStyle: 'round', borderCapStyle: 'round' } },
+    };
+}
+
+// Initialize on script load
+refreshChartDefaults();
 
 function hexToRgba(hex, alpha) {
     const h = hex.replace('#', '');

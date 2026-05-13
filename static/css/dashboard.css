@@ -1,4 +1,5 @@
 :root {
+    /* Dark theme (default) */
     --bg:           #0a0e15;
     --bg-elev-1:    #11151f;
     --bg-elev-2:    #161b27;
@@ -31,6 +32,45 @@
 
     --shadow:       0 1px 3px rgba(0,0,0,0.4), 0 0 0 1px var(--border);
     --shadow-hover: 0 4px 12px rgba(0,0,0,0.5), 0 0 0 1px var(--border);
+
+    /* Track theme for chart code */
+    color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+    /* Light theme — white / blue-grey / blue */
+    --bg:           #f3f6fb;
+    --bg-elev-1:    #ffffff;
+    --bg-elev-2:    #f6f8fc;
+    --bg-hover:     #eef2f8;
+    --bg-header:    #ffffff;
+    --border:       #dbe2ec;
+    --border-soft:  #ebeff5;
+    --text:         #1a2238;
+    --text-2:       #5b6478;
+    --text-3:       #8b95aa;
+    --accent:       #2563eb;
+    --accent-soft:  rgba(37, 99, 235, 0.1);
+    --green:        #15803d;
+    --green-soft:   rgba(21, 128, 61, 0.12);
+    --amber:        #b45309;
+    --amber-soft:   rgba(180, 83, 9, 0.12);
+    --red:          #b91c1c;
+    --red-soft:     rgba(185, 28, 28, 0.10);
+    --purple:       #6d28d9;
+    --grid:         rgba(20, 30, 60, 0.06);
+
+    --shadow:       0 1px 3px rgba(20, 30, 60, 0.06), 0 0 0 1px var(--border);
+    --shadow-hover: 0 4px 12px rgba(20, 30, 60, 0.08), 0 0 0 1px var(--border);
+
+    color-scheme: light;
+}
+
+/* Smooth crossfade when toggling themes */
+html, body, .card, .nav-btn, .range-btn, header,
+.bandwidth-card, .veeam-card, .alert-history-card,
+.settings-card, .update-card, .sec-card {
+    transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -1531,6 +1571,55 @@ main {
 }
 .btn-secondary:hover { background: var(--bg-hover); color: var(--text); }
 
+/* ── Appearance card ──────────────────────────────────────────────────── */
+
+.appearance-card { padding: 16px 20px; }
+
+.appearance-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+}
+
+.appearance-text { flex: 1; }
+
+.appearance-title {
+    color: var(--text);
+    font-weight: 600;
+    font-size: 13px;
+}
+
+.appearance-detail {
+    color: var(--text-3);
+    font-size: 11px;
+    margin-top: 2px;
+    line-height: 1.5;
+    max-width: 580px;
+}
+
+.theme-preview {
+    display: flex;
+    gap: 6px;
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border-soft);
+}
+
+.theme-preview-swatch {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+}
+
+.swatch-bg     { background: var(--bg); }
+.swatch-card   { background: var(--bg-elev-1); }
+.swatch-text   { background: var(--text); }
+.swatch-accent { background: var(--accent); border-color: var(--accent); }
+.swatch-green  { background: var(--green); border-color: var(--green); }
+.swatch-amber  { background: var(--amber); border-color: var(--amber); }
+.swatch-red    { background: var(--red); border-color: var(--red); }
+
 /* ── Updates panel ────────────────────────────────────────────────────── */
 
 .update-card { padding: 18px 20px; }
@@ -1669,10 +1758,55 @@ main {
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-    background: var(--bg-hover);
+    background: var(--border);
     border-radius: 4px;
 }
-::-webkit-scrollbar-thumb:hover { background: var(--border); }
+::-webkit-scrollbar-thumb:hover { background: var(--text-3); }
+
+/* Light-mode tweaks where the dark base needs nudging */
+:root[data-theme="light"] header {
+    box-shadow: 0 1px 0 var(--border);
+    backdrop-filter: none;
+}
+
+:root[data-theme="light"] .reboot-icon {
+    color: #fff;
+}
+
+:root[data-theme="light"] .card:hover {
+    box-shadow: var(--shadow-hover);
+}
+
+:root[data-theme="light"] .alerts-banner {
+    background: linear-gradient(180deg, rgba(185, 28, 28, 0.08) 0%, rgba(185, 28, 28, 0.02) 100%);
+}
+
+:root[data-theme="light"] .reboot-banner {
+    background: linear-gradient(180deg, rgba(180, 83, 9, 0.10) 0%, rgba(180, 83, 9, 0.02) 100%);
+}
+
+:root[data-theme="light"] .nav-btn.active {
+    background: var(--accent-soft);
+}
+
+:root[data-theme="light"] .range-btn.active,
+:root[data-theme="light"] .pill.active,
+:root[data-theme="light"] .btn-primary,
+:root[data-theme="light"] .toggle input:checked + .toggle-slider {
+    color: #fff;
+}
+
+:root[data-theme="light"] .toggle-slider::before { background: #ffffff; }
+
+/* The volume bar fill colours are tuned for dark backgrounds — make them
+   a touch deeper in light mode so they remain visible. */
+:root[data-theme="light"] .volume-bar-fill        { background: var(--accent); }
+:root[data-theme="light"] .bw-row-bar-sent        {
+    background: linear-gradient(90deg, #b45309 0%, #ed8b1d 100%);
+}
+:root[data-theme="light"] .bw-row-bar-recv        {
+    background: linear-gradient(90deg, #2563eb 0%, #5a85ff 100%);
+}
 
 /* Responsive */
 

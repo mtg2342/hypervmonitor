@@ -2,6 +2,25 @@ let currentRange = '1h';
 let currentTab = 'cpu';
 let currentView = 'dashboard';
 
+// ── Theme ───────────────────────────────────────────────────────────────────
+// Initial theme is already applied by the inline <head> script — this just
+// keeps the toggle in sync and lets the user flip it from Settings.
+function getCurrentTheme() {
+    return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+}
+
+function applyTheme(theme) {
+    if (theme === 'light') {
+        document.documentElement.setAttribute('data-theme', 'light');
+    } else {
+        document.documentElement.removeAttribute('data-theme');
+    }
+    try { localStorage.setItem('hvm-theme', theme); } catch (e) {}
+    // Charts cache colours in their dataset options — recreate them to pick up the new palette.
+    refreshChartDefaults();
+    refreshCharts();
+}
+
 // Alert History state
 let alertFilter = { status: 'all', severity: 'all' };
 let alertPage = { limit: 50, offset: 0, total: 0 };
@@ -192,6 +211,15 @@ function bindSettingsHandlers() {
 
     document.getElementById('settingsSave').addEventListener('click', saveSettings);
     document.getElementById('settingsReset').addEventListener('click', resetSettings);
+
+    // Theme toggle (Appearance section)
+    const themeToggle = document.getElementById('themeToggle');
+    if (themeToggle) {
+        themeToggle.checked = (getCurrentTheme() === 'light');
+        themeToggle.addEventListener('change', e => {
+            applyTheme(e.target.checked ? 'light' : 'dark');
+        });
+    }
 }
 
 function updateSettingsDirty() {
