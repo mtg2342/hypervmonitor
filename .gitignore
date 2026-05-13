@@ -30,6 +30,9 @@ config.local.py
 *.log
 apply-update.log
 
+# Lock file written by apply-update.ps1 while running
+.apply-update.lock
+
 # OS
 Thumbs.db
 desktop.ini
