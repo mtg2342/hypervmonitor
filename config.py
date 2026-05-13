@@ -19,7 +19,7 @@ RAW_RETENTION_HOURS    = 48     # keep raw 30-second samples for 2 days
 HOURLY_RETENTION_DAYS  = 30     # keep hourly aggregates for 30 days
 DAILY_RETENTION_DAYS   = 120    # keep daily aggregates for ~4 months
 EVENTS_RETENTION_DAYS  = 30     # keep raw event log entries 30 days
-ALERTS_RETENTION_DAYS  = 90
+ALERTS_RETENTION_DAYS  = 3650   # effectively permanent (~10 years) for the Alert History tab
 VACUUM_THRESHOLD       = 10000  # run VACUUM after deleting this many rows
 
 FLASK_HOST = "127.0.0.1"

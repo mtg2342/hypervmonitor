@@ -1,7 +1,19 @@
 function renderAlerts(alerts) {
     const banner = document.getElementById('alertsBanner');
     const list = document.getElementById('alertsList');
-    if (!alerts || alerts.length === 0) {
+    const badge = document.getElementById('navAlertCount');
+
+    const count = alerts ? alerts.length : 0;
+    if (badge) {
+        if (count > 0) {
+            badge.textContent = count;
+            badge.style.display = 'inline-flex';
+        } else {
+            badge.style.display = 'none';
+        }
+    }
+
+    if (!alerts || count === 0) {
         banner.style.display = 'none';
         return;
     }
@@ -23,7 +35,12 @@ function renderAlerts(alerts) {
 
 function dismissAlert(id) {
     fetch('/api/alerts/' + id + '/dismiss', { method: 'POST' })
-        .then(() => fetchAlerts());
+        .then(() => {
+            fetchAlerts();
+            if (typeof fetchAlertHistory === 'function' && currentView === 'alerts') {
+                fetchAlertHistory();
+            }
+        });
 }
 
 function fetchAlerts() {

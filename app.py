@@ -259,13 +259,51 @@ def alert_dismiss(alert_id):
 
 @app.route("/api/alerts/history")
 def alerts_history():
-    limit = request.args.get("limit", 100, type=int)
+    """Full alert log: active + cleared. Supports filtering and pagination.
+
+    Query params:
+        status   = 'all' (default), 'active', or 'cleared'
+        severity = 'all' (default), 'warning', or 'critical'
+        target   = exact match (optional)
+        limit    = max rows (default 500, capped at 5000)
+        offset   = pagination offset (default 0)
+    """
+    status   = (request.args.get("status",   "all") or "all").lower()
+    severity = (request.args.get("severity", "all") or "all").lower()
+    target   = request.args.get("target")
+    limit    = min(request.args.get("limit",  500, type=int), 5000)
+    offset   = max(request.args.get("offset",   0, type=int), 0)
+
+    where = []
+    params = []
+    if status == "active":
+        where.append("ts_cleared IS NULL")
+    elif status == "cleared":
+        where.append("ts_cleared IS NOT NULL")
+    if severity in ("warning", "critical"):
+        where.append("severity = ?")
+        params.append(severity)
+    if target:
+        where.append("target = ?")
+        params.append(target)
+
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT * FROM alerts ORDER BY ts_raised DESC LIMIT ?", (limit,)
+            f"SELECT * FROM alerts {where_sql} ORDER BY ts_raised DESC LIMIT ? OFFSET ?",
+            (*params, limit, offset),
         ).fetchall()
-        return jsonify(_rows_to_dicts(rows))
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM alerts {where_sql}", tuple(params)
+        ).fetchone()[0]
+        return jsonify({
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "rows": _rows_to_dicts(rows),
+        })
     finally:
         conn.close()
 

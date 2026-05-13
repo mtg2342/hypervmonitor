@@ -1,5 +1,11 @@
 let currentRange = '1h';
 let currentTab = 'cpu';
+let currentView = 'dashboard';
+
+// Alert History state
+let alertFilter = { status: 'all', severity: 'all' };
+let alertPage = { limit: 50, offset: 0, total: 0 };
+let alertRefreshTimer = null;
 
 const sparklines = {};
 const vmSparklines = {};
@@ -33,6 +39,40 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    // View switching
+    document.getElementById('mainNav').addEventListener('click', e => {
+        const btn = e.target.closest('.nav-btn');
+        if (!btn) return;
+        switchView(btn.dataset.view);
+    });
+
+    // Alert filter pills
+    document.querySelectorAll('.filter-pills').forEach(group => {
+        group.addEventListener('click', e => {
+            const pill = e.target.closest('.pill');
+            if (!pill) return;
+            group.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
+            pill.classList.add('active');
+            alertFilter[group.dataset.filter] = pill.dataset.value;
+            alertPage.offset = 0;
+            fetchAlertHistory();
+        });
+    });
+
+    // Pagination
+    document.getElementById('alertPrev').addEventListener('click', () => {
+        if (alertPage.offset > 0) {
+            alertPage.offset = Math.max(0, alertPage.offset - alertPage.limit);
+            fetchAlertHistory();
+        }
+    });
+    document.getElementById('alertNext').addEventListener('click', () => {
+        if (alertPage.offset + alertPage.limit < alertPage.total) {
+            alertPage.offset += alertPage.limit;
+            fetchAlertHistory();
+        }
+    });
+
     fetchLiveData();
     fetchAlerts();
     fetchSystemInfo();
@@ -45,6 +85,117 @@ document.addEventListener('DOMContentLoaded', () => {
     setInterval(fetchSystemEvents, 60000);
     setInterval(refreshCharts, 60000);
 });
+
+
+// ── View switching ──────────────────────────────────────────────────────────
+
+function switchView(name) {
+    currentView = name;
+    document.querySelectorAll('.nav-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.view === name);
+    });
+    document.querySelectorAll('.view').forEach(v => {
+        v.classList.toggle('active', v.id === 'view-' + name);
+    });
+    // Range buttons only make sense on the Dashboard view
+    document.getElementById('rangeButtons').style.display = (name === 'dashboard') ? 'flex' : 'none';
+
+    if (name === 'alerts') {
+        fetchAlertHistory();
+        if (!alertRefreshTimer) {
+            alertRefreshTimer = setInterval(fetchAlertHistory, 15000);
+        }
+    } else if (alertRefreshTimer) {
+        clearInterval(alertRefreshTimer);
+        alertRefreshTimer = null;
+    }
+}
+
+
+// ── Alert History ───────────────────────────────────────────────────────────
+
+function fetchAlertHistory() {
+    const p = new URLSearchParams({
+        status:   alertFilter.status,
+        severity: alertFilter.severity,
+        limit:    alertPage.limit,
+        offset:   alertPage.offset,
+    });
+    fetch('/api/alerts/history?' + p)
+        .then(r => r.json())
+        .then(data => renderAlertHistory(data))
+        .catch(() => {});
+}
+
+function renderAlertHistory(data) {
+    const tbody = document.getElementById('alertHistoryBody');
+    const total = data.total || 0;
+    const rows  = data.rows || [];
+
+    alertPage.total = total;
+    document.getElementById('alertHistoryTotal').textContent = total;
+
+    if (rows.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="no-events">No alerts match the current filters</td></tr>';
+        document.getElementById('alertSummary').textContent = '0 of 0';
+        document.getElementById('alertPagination').style.display = 'none';
+        return;
+    }
+
+    tbody.innerHTML = rows.map(a => {
+        const isActive = a.ts_cleared == null;
+        const statusCls = isActive ? 'active' : 'cleared';
+        const sevCls    = (a.severity || '').toLowerCase();
+        const raised    = formatDateTimeFull(a.ts_raised);
+        const cleared   = isActive ? '—' : formatDateTimeFull(a.ts_cleared);
+        const duration  = isActive
+            ? formatDuration((Date.now() / 1000) - a.ts_raised) + ' ongoing'
+            : formatDuration(a.ts_cleared - a.ts_raised);
+
+        return `
+            <tr>
+                <td class="col-status"><span class="status-pill ${statusCls}">${isActive ? 'Active' : 'Cleared'}</span></td>
+                <td class="col-sev"><span class="sev-pill ${sevCls}">${escapeHtml(a.severity || '')}</span></td>
+                <td class="col-target">${escapeHtml(a.target || '')}</td>
+                <td class="col-msg">${escapeHtml(a.message || '')}</td>
+                <td class="col-raised">${raised}</td>
+                <td class="col-cleared">${cleared}</td>
+                <td class="col-dur">${duration}</td>
+            </tr>
+        `;
+    }).join('');
+
+    const start = alertPage.offset + 1;
+    const end   = Math.min(alertPage.offset + rows.length, total);
+    document.getElementById('alertSummary').textContent = `Showing ${start}–${end} of ${total}`;
+
+    const pag = document.getElementById('alertPagination');
+    if (total > alertPage.limit) {
+        pag.style.display = 'flex';
+        document.getElementById('alertPrev').disabled = alertPage.offset <= 0;
+        document.getElementById('alertNext').disabled = alertPage.offset + alertPage.limit >= total;
+        const page = Math.floor(alertPage.offset / alertPage.limit) + 1;
+        const last = Math.ceil(total / alertPage.limit);
+        document.getElementById('alertPageInfo').textContent = `Page ${page} of ${last}`;
+    } else {
+        pag.style.display = 'none';
+    }
+}
+
+function formatDateTimeFull(epoch) {
+    const d = new Date(epoch * 1000);
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: '2-digit' }) +
+           ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function formatDuration(seconds) {
+    if (seconds == null || seconds < 0) return '—';
+    const s = Math.floor(seconds);
+    if (s < 60)    return s + 's';
+    if (s < 3600)  return Math.floor(s / 60) + 'm';
+    if (s < 86400) return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm';
+    return Math.floor(s / 86400) + 'd ' + Math.floor((s % 86400) / 3600) + 'h';
+}
 
 
 // ── System Info ─────────────────────────────────────────────────────────────
