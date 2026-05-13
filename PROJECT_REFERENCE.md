@@ -265,15 +265,29 @@ The host pulls updates from GitHub. Code changes are made on a separate dev mach
                                   └──────────────────────┘
 ```
 
-### First-time host setup
+### First-time host setup (one-line installer)
 
+Open PowerShell (or Windows Terminal) and paste:
+
+```powershell
+iex (irm https://raw.githubusercontent.com/mtg2342/hypervmonitor/main/install.ps1)
+```
+
+The installer will:
+- Self-elevate to Administrator
+- Check for Git and Python — offer to install them via `winget` if missing
+- Ask where to install (default `C:\hypervmonitor`)
+- `git clone` the repo
+- `pip install` Flask
+- Offer to create a Task Scheduler entry that runs `start.bat` at login (auto-start)
+- Offer to launch the dashboard and open `http://127.0.0.1:5000` in the browser
+
+### First-time host setup (manual)
+
+If you prefer not to run the installer:
 1. Install Python 3.10+ (python.org, "Add to PATH" checked) and Git for Windows (git-scm.com)
-2. Clone the repo to its final location, e.g.:
-   ```cmd
-   cd C:\
-   git clone https://github.com/mtg2342/hypervmonitor.git
-   ```
-3. In the cloned folder, right-click `start.bat` → **Run as administrator**
+2. Clone the repo: `git clone https://github.com/mtg2342/hypervmonitor.git C:\hypervmonitor`
+3. Right-click `start.bat` → **Run as administrator**
 
 ### Updating the host
 
