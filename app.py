@@ -213,6 +213,52 @@ def veeam_backups():
         conn.close()
 
 
+@app.route("/api/veeam/debug")
+def veeam_debug():
+    """Return raw Veeam event log entries from the last 7 days for debugging.
+
+    Useful when the Backups section shows the wrong result. Hit
+    http://127.0.0.1:5000/api/veeam/debug from a browser to see exactly
+    which events the parser is looking at and what their messages say.
+    """
+    script = (
+        "$out = @(); "
+        "$cut = (Get-Date).AddDays(-7); "
+        "foreach ($log in @('Veeam Backup', 'Veeam Agent', 'Veeam Endpoint Backup', 'Application')) { "
+        "  try { "
+        "    $evs = Get-WinEvent -FilterHashtable @{LogName=$log; StartTime=$cut} -MaxEvents 200 -ErrorAction Stop | "
+        "           Where-Object { $_.ProviderName -like '*Veeam*' }; "
+        "    foreach ($e in $evs) { "
+        "      $msg = if ($e.Message) { ($e.Message -replace '\\r?\\n',' ').Substring(0,[Math]::Min(280,$e.Message.Length)) } else { '' }; "
+        "      $out += [PSCustomObject]@{ "
+        "        Log = $log; "
+        "        Provider = $e.ProviderName; "
+        "        Id = $e.Id; "
+        "        Level = $e.LevelDisplayName; "
+        "        Time = $e.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss'); "
+        "        Message = $msg "
+        "      } "
+        "    } "
+        "  } catch {} "
+        "}; "
+        "($out | Sort-Object Time -Descending | Select-Object -First 100) | ConvertTo-Json -Compress -Depth 3"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, text=True, timeout=30,
+        )
+        import json as _json
+        if result.returncode != 0 or not result.stdout.strip():
+            return jsonify({"ok": False, "error": (result.stderr or "no output")[:500], "events": []})
+        events = _json.loads(result.stdout)
+        if isinstance(events, dict):
+            events = [events]
+        return jsonify({"ok": True, "count": len(events), "events": events})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "events": []})
+
+
 @app.route("/api/veeam/refresh", methods=["POST"])
 def veeam_refresh():
     """Trigger an immediate Veeam re-poll from the dashboard refresh button."""

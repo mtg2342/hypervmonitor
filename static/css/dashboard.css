@@ -651,15 +651,19 @@ main {
 
 /* ── Veeam Backups ───────────────────────────────────────────────────── */
 
-.veeam-card { padding: 14px 16px; }
+.veeam-card { padding: 12px 16px; }
 
 .veeam-summary {
     display: flex;
-    gap: 12px;
-    margin-bottom: 12px;
-    padding-bottom: 12px;
-    border-bottom: 1px solid var(--border-soft);
+    gap: 8px;
+    margin-bottom: 0;
     flex-wrap: wrap;
+}
+
+.veeam-summary:not(:empty) {
+    margin-bottom: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border-soft);
 }
 
 .veeam-summary-pill {
@@ -692,19 +696,20 @@ main {
 .veeam-summary-pill.running { color: var(--accent); }
 .veeam-summary-pill.running .dot { background: var(--accent); animation: pulse 2s infinite; }
 
-.veeam-jobs { display: flex; flex-direction: column; gap: 6px; }
+.veeam-jobs { display: flex; flex-direction: column; gap: 0; }
 
 .veeam-job {
     display: grid;
     grid-template-columns: 1fr auto auto auto;
     gap: 14px;
     align-items: center;
-    padding: 8px 0;
+    padding: 7px 0;
     border-bottom: 1px dashed var(--border-soft);
     font-size: 12px;
 }
 
-.veeam-job:last-child { border-bottom: none; }
+.veeam-job:last-child { border-bottom: none; padding-bottom: 0; }
+.veeam-job:first-child { padding-top: 0; }
 
 .veeam-job-name {
     color: var(--text);
@@ -779,8 +784,8 @@ main {
 .veeam-state {
     font-size: 12px;
     color: var(--text-2);
-    margin-bottom: 12px;
-    padding: 10px 12px;
+    margin-bottom: 10px;
+    padding: 8px 10px;
     background: var(--bg);
     border: 1px solid var(--border-soft);
     border-radius: var(--radius-sm);
@@ -788,7 +793,15 @@ main {
 .veeam-state.hidden { display: none; }
 .veeam-state.warn   { color: var(--amber); border-color: rgba(245, 177, 74, 0.3); }
 .veeam-state.err    { color: var(--red);   border-color: rgba(255, 107, 107, 0.3); }
-.veeam-state.info   { color: var(--text-2); }
+.veeam-state.info {
+    color: var(--text-3);
+    background: transparent;
+    border: none;
+    padding: 0 0 8px 0;
+    margin-bottom: 8px;
+    border-bottom: 1px solid var(--border-soft);
+    font-size: 10px;
+}
 .veeam-state .veeam-state-title {
     font-weight: 600;
     margin-bottom: 4px;

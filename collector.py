@@ -969,6 +969,15 @@ class MetricCollector:
         write session completion events to a 'Veeam Backup' / 'Veeam Agent' /
         Application log channel.
 
+        Detection strategy:
+          1. Only consider events that look like a SESSION-END summary
+             (event IDs 41/110/111/190/191/192/193/194, or message contains
+             completed/finished/failed terminal keywords).
+          2. Determine result from the MESSAGE TEXT first — message wording is
+             more reliable than event ID across Veeam product/version variants.
+             Fall back to event ID only when the message is ambiguous.
+          3. Keep the most recent terminal event per job.
+
         Returns (list_of_job_dicts, diagnostic_string).
         """
         script = (
@@ -990,31 +999,55 @@ class MetricCollector:
             "  Write-Output (@{Jobs=@(); Diag=($diagParts -join '; ')} | ConvertTo-Json -Compress -Depth 3); "
             "  exit "
             "}; "
-            # Parse each event to extract (job name, result, time)
+            "$terminalIds = @(41, 110, 111, 190, 191, 192, 193, 194); "
             "$jobMap = @{}; "
             "foreach ($e in $results) { "
             "  $msg = $e.Message; "
             "  if (-not $msg) { continue }; "
+
+            # Skip events that aren't a session-end summary.
+            # Either it's a known terminal event ID, or it explicitly contains
+            # one of the terminal keywords ("completed", "finished", "failed").
+            "  $isTerminal = $false; "
+            "  if ($terminalIds -contains $e.Id) { $isTerminal = $true } "
+            "  elseif ($msg -match '(?i)\\b(?:completed|finished|failed)\\b') { $isTerminal = $true }; "
+            "  if (-not $isTerminal) { continue }; "
+
+            # Extract job name — try multiple patterns
             "  $jobName = $null; "
             "  if     ($msg -match \"[Jj]ob\\s+['""\\u2019\\u201D](.+?)['""\\u2019\\u201D]\")     { $jobName = $matches[1] } "
             "  elseif ($msg -match \"[Jj]ob\\s+\\[(.+?)\\]\")                                   { $jobName = $matches[1] } "
-            "  elseif ($msg -match \"Backup\\s+(?:of\\s+|job\\s+)?['""]?([^'""\\s].{1,80}?)['""]?\\s+(?:has\\s+)?(?:completed|finished|failed|succeeded)\") { $jobName = $matches[1].Trim() } "
+            "  elseif ($msg -match \"[Pp]olicy\\s+['""\\u2019\\u201D](.+?)['""\\u2019\\u201D]\")  { $jobName = $matches[1] } "
+            "  elseif ($msg -match \"['""\\u2019\\u201D](.+?)['""\\u2019\\u201D]\\s+(?:backup|job|policy)\") { $jobName = $matches[1] } "
+            "  elseif ($msg -match \"[Bb]ackup\\s+(?:of\\s+|job\\s+)?['""]?([^'""\\s].{1,80}?)['""]?\\s+(?:has\\s+(?:been\\s+)?)?(?:completed|finished|failed|succeeded)\") { $jobName = $matches[1].Trim() } "
             "  if (-not $jobName) { continue }; "
+
+            # MESSAGE-BASED result detection — checked first, before event ID,
+            # because Veeam Agent often emits multiple events per session and
+            # only the message text reliably indicates the actual outcome.
             "  $result = $null; "
-            "  if     ($e.Id -in @(110, 111))                          { $result = 'Success' } "
-            "  elseif ($e.Id -in @(190))                                { $result = 'Warning' } "
-            "  elseif ($e.Id -in @(191, 192, 193, 194))                { $result = 'Failed' } "
-            "  elseif ($msg -match 'completed\\s+successfully')        { $result = 'Success' } "
-            "  elseif ($msg -match 'with\\s+warnings?')                { $result = 'Warning' } "
-            "  elseif ($msg -match '(?i)\\bfail(?:ed|ure)?\\b|\\berror\\b') { $result = 'Failed' } "
+            "  if     ($msg -match '(?i)successfully\\s+(?:finished|completed)') { $result = 'Success' } "
+            "  elseif ($msg -match '(?i)(?:finished|completed)\\s+successfully')  { $result = 'Success' } "
+            "  elseif ($msg -match '(?i)(?:finished|completed)\\s+with\\s+warning') { $result = 'Warning' } "
+            "  elseif ($msg -match '(?i)(?:has\\s+failed|backup\\s+failed|with\\s+errors?|\\bjob\\s+failed)') { $result = 'Failed' } "
+
+            # Event-ID fallback only if message text was ambiguous
+            "  if (-not $result) { "
+            "    if     ($e.Id -in @(110, 111))                       { $result = 'Success' } "
+            "    elseif ($e.Id -in @(190))                             { $result = 'Warning' } "
+            "    elseif ($e.Id -in @(191, 192, 193, 194))             { $result = 'Failed' } "
+            "  }; "
             "  if (-not $result) { continue }; "
+
+            # Keep the most recent terminal event for each job
             "  if (-not $jobMap.ContainsKey($jobName) -or $e.TimeCreated -gt $jobMap[$jobName].TimeRaw) { "
             "    $jobMap[$jobName] = @{ "
             "      Name = $jobName; "
             "      Result = $result; "
             "      TimeRaw = $e.TimeCreated; "
             "      EndTs = [int][DateTimeOffset]::new($e.TimeCreated).ToUnixTimeSeconds(); "
-            "      Source = $e.ProviderName "
+            "      Source = $e.ProviderName; "
+            "      EventId = $e.Id "
             "    } "
             "  } "
             "}; "
