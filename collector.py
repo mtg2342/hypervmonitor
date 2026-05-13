@@ -555,13 +555,19 @@ class MetricCollector:
             "} catch { $result['RdpSuccess24h'] = -1 }; "
             "try { "
             "  $reasons = @(); "
+            # Component Based Servicing — set when a Windows servicing
+            # operation (feature install, update, patch) needs a reboot.
+            # This is the most reliable indicator and what wuauclt uses.
             "  if (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\RebootPending') { $reasons += 'Component Based Servicing' }; "
+            # Windows Update — set by wuauserv when an update has staged
+            # files that won't be effective until reboot.
             "  if (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update\\RebootRequired') { $reasons += 'Windows Update' }; "
-            "  if (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Updates\\UpdateExeVolatile') { $reasons += 'Update exec volatile' }; "
-            "  $pfr = (Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager' -Name PendingFileRenameOperations -ErrorAction SilentlyContinue).PendingFileRenameOperations; "
-            "  if ($pfr) { $reasons += 'Pending file rename' }; "
-            "  $cv = (Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\Netlogon\\JoinDomain' -ErrorAction SilentlyContinue); "
-            "  if ($cv) { $reasons += 'Domain join' }; "
+            # Server Manager pending operations (Windows Server only).
+            "  if (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\ServerManager\\CurrentRebootAttempts') { $reasons += 'Server Manager' }; "
+            # NOTE: PendingFileRenameOperations and Netlogon\\JoinDomain
+            # used to be in this list but were too noisy — both get set
+            # for routine non-reboot reasons (installers writing temp
+            # files, domain rejoin attempts) and caused false positives.
             "  $result['PendingReboot'] = [int]($reasons.Count -gt 0); "
             "  $result['RebootReasons'] = ($reasons -join ', '); "
             "} catch { $result['PendingReboot'] = 0; $result['RebootReasons'] = '' }; "

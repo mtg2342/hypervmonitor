@@ -228,6 +228,46 @@ header h1::before {
     text-align: right;
 }
 
+.header-refresh-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-2);
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    font-family: inherit;
+}
+
+.header-refresh-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+    border-color: var(--accent);
+}
+
+.header-refresh-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.header-refresh-btn.spinning {
+    animation: header-spin 0.8s linear infinite;
+    color: var(--accent);
+    border-color: var(--accent);
+}
+
+@keyframes header-spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+}
+
 /* ── Main ────────────────────────────────────────────────────────────── */
 
 main {

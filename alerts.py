@@ -142,24 +142,38 @@ def _check_pending_reboot(conn, ts):
 
 
 def _check_veeam_backups(conn, ts):
-    """Raise an alert for any backup job whose last result is Failed."""
+    """Raise an alert ONLY when a Veeam backup failed.
+
+    Veeam itself treats "completed with warnings" as a successful run (its
+    own UI shows a green check). The dashboard still surfaces the WARNING
+    pill in the Veeam Backups section so the user can see it, but it no
+    longer creates a top-level alert banner / Alert History entry.
+    """
     rows = conn.execute(
         "SELECT job_name, last_result, last_end_ts FROM veeam_backups"
     ).fetchall()
-    seen_jobs = set()
     for r in rows:
         job = r["job_name"]
-        seen_jobs.add(job)
         target = "veeam:" + job
         result = (r["last_result"] or "").lower()
         if result == "failed":
             _raise_alert(conn, ts, "critical", target, "backup",
                           f"Veeam job '{job}' failed", 0)
-        elif result == "warning":
-            _raise_alert(conn, ts, "warning", target, "backup",
-                          f"Veeam job '{job}' completed with warnings", 0)
         else:
+            # Success and Warning: no alert. Clear any prior alert.
             _clear_alert(conn, ts, target, "backup")
+
+    # One-time migration: clear out any lingering 'warning' severity Veeam
+    # alerts that the previous version raised. Going forward, Veeam alerts
+    # are only ever 'critical'.
+    conn.execute(
+        """UPDATE alerts SET ts_cleared = ?
+           WHERE ts_cleared IS NULL
+             AND metric = 'backup'
+             AND target LIKE 'veeam:%'
+             AND severity = 'warning'""",
+        (ts,),
+    )
 
 
 def _raise_alert(conn, ts, severity, target, metric, message, value):

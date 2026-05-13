@@ -101,6 +101,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     bindVeeamRefresh();
     bindWbRefresh();
+    bindHeaderRefresh();
     // Apply backup-toggle visibility immediately so disabled sections never
     // briefly flash before settings load.
     fetch('/api/settings')
@@ -739,6 +740,43 @@ function bindWbRefresh() {
             .finally(() => {
                 btn.disabled = false;
                 btn.textContent = prev;
+            });
+    });
+}
+
+
+// ── Header refresh button ───────────────────────────────────────────────────
+
+function bindHeaderRefresh() {
+    const btn = document.getElementById('headerRefresh');
+    if (!btn || btn.dataset.bound) return;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', () => {
+        btn.disabled = true;
+        btn.classList.add('spinning');
+        // Hit the server-side refresh first so it re-runs the host + security
+        // collection cycles (this is what re-checks pending-reboot status).
+        fetch('/api/refresh', { method: 'POST' })
+            .then(r => r.json())
+            .catch(() => null)
+            .then(() => {
+                // Now re-fetch everything the dashboard displays.
+                fetchLiveData();
+                fetchAlerts();
+                fetchSystemInfo();
+                fetchSystemEvents();
+                fetchBandwidth();
+                fetchSecurityForReboot();
+                fetchVeeam();
+                fetchWindowsBackup();
+            })
+            .finally(() => {
+                // Hold the spin briefly so the user can see it animated even
+                // when the refresh completes very quickly.
+                setTimeout(() => {
+                    btn.disabled = false;
+                    btn.classList.remove('spinning');
+                }, 800);
             });
     });
 }

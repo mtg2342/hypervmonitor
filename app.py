@@ -287,6 +287,33 @@ def windows_backup_status():
         conn.close()
 
 
+@app.route("/api/refresh", methods=["POST"])
+def refresh_all():
+    """Trigger an immediate refresh of host counters, volumes, system info, and
+    security status (which includes the pending-reboot check). Called by the
+    header refresh button so the user can force an out-of-band recheck without
+    waiting for the regular poll cycle.
+    """
+    if not app.config.get("_collector_instance"):
+        return jsonify({"ok": False, "error": "Collector not running"})
+    try:
+        collector = app.config["_collector_instance"]
+        conn = get_connection()
+        try:
+            now = time.time()
+            collector._collect_host_counters(conn, now)
+            collector._collect_volumes(conn, now)
+            collector._collect_system_info(conn, now)
+            collector._collect_security(conn, now)
+            conn.commit()
+        finally:
+            conn.close()
+        return jsonify({"ok": True})
+    except Exception as e:
+        logger.exception("Manual refresh failed")
+        return jsonify({"ok": False, "error": str(e)})
+
+
 @app.route("/api/windowsbackup/refresh", methods=["POST"])
 def windows_backup_refresh():
     if app.config.get("_collector_instance"):
