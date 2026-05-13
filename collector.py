@@ -756,26 +756,89 @@ class MetricCollector:
     # ── Veeam Backup & Replication ───────────────────────────────────────────
 
     def _collect_veeam(self, conn, ts):
-        """Scan Veeam B&R job history. No-op if Veeam isn't installed."""
-        # Try loading the Veeam PowerShell module by name; fall back to the
-        # default installation path; fall back to the legacy PSSnapin.
+        """Scan Veeam B&R job history.
+
+        Detection cascade — try each in order, record which one worked:
+          1. Default module name (PSModulePath includes Veeam path)
+          2. Registry's recorded CorePath
+          3. Two known install locations
+          4. Recursive filesystem search under Program Files\\Veeam
+          5. Legacy PSSnapin
+
+        On the local Veeam B&R server, Connect-VBRServer -Server 'localhost' is
+        attempted after module load to ensure the cmdlets have a session.
+        Veeam 12.x auto-connects; older versions don't.
+
+        Whatever the outcome, a row is written to veeam_status describing what
+        happened, so the UI can show a useful diagnostic.
+        """
         script = (
-            "$loaded = $false; "
-            "try { Import-Module Veeam.Backup.PowerShell -ErrorAction Stop; $loaded = $true } catch {}; "
+            "$loaded = $null; "
+            "$loadErrors = @(); "
+            "$ourErr = $null; "
+
+            # Method 1: default module name
+            "try { Import-Module Veeam.Backup.PowerShell -ErrorAction Stop -DisableNameChecking; "
+            "  $loaded = 'Veeam.Backup.PowerShell (auto)'; } "
+            "catch { $loadErrors += \"auto-import: $($_.Exception.Message)\" }; "
+
+            # Method 2: registry-recorded install path
             "if (-not $loaded) { "
-            "  try { Import-Module 'C:\\Program Files\\Veeam\\Backup and Replication\\Console\\Veeam.Backup.PowerShell\\Veeam.Backup.PowerShell.psd1' -ErrorAction Stop; $loaded = $true } catch {} "
+            "  try { "
+            "    $reg = Get-ItemProperty 'HKLM:\\SOFTWARE\\Veeam\\Veeam Backup and Replication' -ErrorAction Stop; "
+            "    if ($reg.CorePath) { "
+            "      $p = Join-Path $reg.CorePath 'Veeam.Backup.PowerShell\\Veeam.Backup.PowerShell.psd1'; "
+            "      if (Test-Path $p) { Import-Module $p -ErrorAction Stop -DisableNameChecking; $loaded = \"registry: $p\" } "
+            "    } "
+            "  } catch { $loadErrors += \"registry: $($_.Exception.Message)\" } "
             "}; "
+
+            # Method 3: known install paths
             "if (-not $loaded) { "
-            "  try { Add-PSSnapin VeeamPSSnapIn -ErrorAction Stop; $loaded = $true } catch {} "
+            "  foreach ($p in @("
+            "    'C:\\Program Files\\Veeam\\Backup and Replication\\Console\\Veeam.Backup.PowerShell\\Veeam.Backup.PowerShell.psd1',"
+            "    'C:\\Program Files\\Veeam\\Backup and Replication\\Backup\\Veeam.Backup.PowerShell\\Veeam.Backup.PowerShell.psd1'"
+            "  )) { "
+            "    if (Test-Path $p) { "
+            "      try { Import-Module $p -ErrorAction Stop -DisableNameChecking; $loaded = \"known-path: $p\"; break } "
+            "      catch { $loadErrors += \"known-path '$p': $($_.Exception.Message)\" } "
+            "    } "
+            "  } "
             "}; "
-            "if (-not $loaded) { Write-Output '[]'; exit }; "
+
+            # Method 4: filesystem recursive search under Program Files
+            "if (-not $loaded) { "
+            "  try { "
+            "    $found = Get-ChildItem -Path 'C:\\Program Files\\Veeam' -Filter 'Veeam.Backup.PowerShell.psd1' "
+            "             -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1; "
+            "    if ($found) { "
+            "      Import-Module $found.FullName -ErrorAction Stop -DisableNameChecking; "
+            "      $loaded = \"fs-search: $($found.FullName)\" "
+            "    } "
+            "  } catch { $loadErrors += \"fs-search: $($_.Exception.Message)\" } "
+            "}; "
+
+            # Method 5: legacy PSSnapin
+            "if (-not $loaded) { "
+            "  try { Add-PSSnapin VeeamPSSnapIn -ErrorAction Stop; $loaded = 'VeeamPSSnapIn (legacy)' } "
+            "  catch { $loadErrors += \"snapin: $($_.Exception.Message)\" } "
+            "}; "
+
+            "if (-not $loaded) { "
+            "  Write-Output (@{Status='not_loaded'; Loaded=$null; Error=($loadErrors -join '; '); Jobs=@()} | ConvertTo-Json -Compress -Depth 3); "
+            "  exit "
+            "}; "
+
+            # Module loaded — try Connect-VBRServer (idempotent, ignore failures)
+            "try { Connect-VBRServer -Server 'localhost' -ErrorAction SilentlyContinue | Out-Null } catch {}; "
+
+            # Now fetch jobs
             "try { "
-            "  $jobs = @(Get-VBRJob -ErrorAction SilentlyContinue); "
-            "  $cdpJobs = @(); "
-            "  try { $cdpJobs = @(Get-VBRComputerBackupJob -ErrorAction SilentlyContinue) } catch {}; "
-            "  $allJobs = $jobs + $cdpJobs; "
+            "  $jobs = @(); "
+            "  try { $jobs += @(Get-VBRJob -ErrorAction SilentlyContinue) } catch {}; "
+            "  try { $jobs += @(Get-VBRComputerBackupJob -ErrorAction SilentlyContinue) } catch {}; "
             "  $out = @(); "
-            "  foreach ($j in $allJobs) { "
+            "  foreach ($j in $jobs) { "
             "    if (-not $j) { continue }; "
             "    $name = if ($j.Name) { $j.Name } else { 'unnamed' }; "
             "    $type = if ($j.JobType) { \"$($j.JobType)\" } elseif ($j.Type) { \"$($j.Type)\" } else { '' }; "
@@ -792,29 +855,46 @@ class MetricCollector:
             "      $result = if ($session.Result) { \"$($session.Result)\" } else { 'None' }; "
             "      $state  = if ($session.State)  { \"$($session.State)\"  } else { '' }; "
             "      $dur = if ($endT -gt 0 -and $startT -gt 0) { $endT - $startT } else { 0 }; "
-            "      $out += [PSCustomObject]@{ "
-            "        Name = $name; Type = $type; Result = $result; State = $state; "
-            "        StartTs = $startT; EndTs = $endT; DurationSec = $dur; "
-            "        ScheduleEnabled = [int]$enabled "
-            "      } "
+            "      $out += [PSCustomObject]@{ Name=$name; Type=$type; Result=$result; State=$state; "
+            "        StartTs=$startT; EndTs=$endT; DurationSec=$dur; ScheduleEnabled=[int]$enabled } "
             "    } else { "
-            "      $out += [PSCustomObject]@{ "
-            "        Name = $name; Type = $type; Result = 'NeverRan'; State = ''; "
-            "        StartTs = 0; EndTs = 0; DurationSec = 0; "
-            "        ScheduleEnabled = [int]$enabled "
-            "      } "
+            "      $out += [PSCustomObject]@{ Name=$name; Type=$type; Result='NeverRan'; State=''; "
+            "        StartTs=0; EndTs=0; DurationSec=0; ScheduleEnabled=[int]$enabled } "
             "    } "
             "  }; "
-            "  $out | ConvertTo-Json -Compress -Depth 4 "
-            "} catch { Write-Output '[]' }"
+            "  $status = if ($out.Count -eq 0) { 'no_jobs' } else { 'ok' }; "
+            "  Write-Output (@{Status=$status; Loaded=$loaded; Error=$null; Jobs=$out} | ConvertTo-Json -Compress -Depth 4) "
+            "} catch { "
+            "  Write-Output (@{Status='error'; Loaded=$loaded; Error=$_.Exception.Message; Jobs=@()} | ConvertTo-Json -Compress -Depth 3) "
+            "}"
         )
-        data = _ensure_list(ps_json(script, timeout=60))
-        if not data:
-            logger.debug("Veeam: no data (not installed or no jobs)")
+
+        data = ps_json(script, timeout=120)
+        if not isinstance(data, dict):
+            # Total parse failure — record as error so the UI can show it
+            conn.execute(
+                """UPDATE veeam_status SET last_check_ts=?, status=?, module_used=?, error_message=?, jobs_count=?
+                   WHERE id=1""",
+                (ts, "error", None, "Could not parse PowerShell output", 0),
+            )
+            logger.warning("Veeam: PowerShell returned non-dict / parse error")
             return
 
+        status = data.get("Status", "error")
+        loaded = data.get("Loaded")
+        err    = data.get("Error")
+        jobs   = _ensure_list(data.get("Jobs"))
+
+        # Persist status row
+        conn.execute(
+            """UPDATE veeam_status SET last_check_ts=?, status=?, module_used=?, error_message=?, jobs_count=?
+               WHERE id=1""",
+            (ts, status, loaded, err, len(jobs)),
+        )
+
+        # Persist jobs (only if any)
         names_seen = set()
-        for j in data:
+        for j in jobs:
             if not isinstance(j, dict) or not j.get("Name"):
                 continue
             name = j["Name"]
@@ -842,9 +922,19 @@ class MetricCollector:
                     ts,
                 ),
             )
-        # Optionally clean up jobs that disappeared from Veeam more than 7 days ago
+
+        # Clean up jobs that disappeared more than 7 days ago
         conn.execute(
             "DELETE FROM veeam_backups WHERE seen_ts < ?",
             (ts - 7 * 86400,),
         )
-        logger.info("Veeam: %d job(s) tracked", len(names_seen))
+
+        if status == "ok":
+            logger.info("Veeam: %d job(s) tracked via %s", len(names_seen), loaded)
+        elif status == "no_jobs":
+            logger.info("Veeam: module loaded (%s) but no jobs found", loaded)
+        elif status == "not_loaded":
+            logger.warning("Veeam: PowerShell module not detected. Errors: %s",
+                           (err or "")[:300])
+        else:
+            logger.warning("Veeam: %s (loaded=%s): %s", status, loaded, (err or "")[:300])

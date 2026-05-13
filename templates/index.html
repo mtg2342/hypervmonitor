@@ -99,12 +99,14 @@
         </section>
 
         <!-- Veeam Backups -->
-        <section id="veeamSection" style="display:none;">
+        <section id="veeamSection">
             <div class="section-title">
                 Veeam Backups
-                <span class="count" id="veeamCount">0</span>
+                <span class="count" id="veeamCount">—</span>
+                <button class="veeam-refresh-btn" id="veeamRefresh" title="Re-scan Veeam now">↻ refresh</button>
             </div>
             <section class="card veeam-card">
+                <div class="veeam-state" id="veeamState"></div>
                 <div class="veeam-summary" id="veeamSummary"></div>
                 <div class="veeam-jobs" id="veeamJobs"></div>
             </section>

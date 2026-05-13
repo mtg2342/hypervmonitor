@@ -252,6 +252,18 @@ def init_db(db_path=None):
         )
     """)
 
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS veeam_status (
+            id              INTEGER PRIMARY KEY CHECK (id = 1),
+            last_check_ts   REAL,
+            status          TEXT,   -- 'ok' | 'not_loaded' | 'error' | 'no_jobs'
+            module_used     TEXT,
+            error_message   TEXT,
+            jobs_count      INTEGER
+        )
+    """)
+    c.execute("INSERT OR IGNORE INTO veeam_status (id) VALUES (1)")
+
     conn.commit()
     conn.close()
     logger.info("Database initialized at %s", db_path or DB_PATH)

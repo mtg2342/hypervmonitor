@@ -99,6 +99,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    bindVeeamRefresh();
     fetchLiveData();
     fetchAlerts();
     fetchSystemInfo();
@@ -561,30 +562,91 @@ function fetchVeeam() {
         .catch(() => {});
 }
 
+function bindVeeamRefresh() {
+    const btn = document.getElementById('veeamRefresh');
+    if (!btn || btn.dataset.bound) return;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', () => {
+        btn.disabled = true;
+        const prev = btn.textContent;
+        btn.textContent = '↻ scanning…';
+        fetch('/api/veeam/refresh', { method: 'POST' })
+            .then(r => r.json())
+            .then(() => fetchVeeam())
+            .finally(() => {
+                btn.disabled = false;
+                btn.textContent = prev;
+            });
+    });
+}
+
 function renderVeeam(d) {
     const section = document.getElementById('veeamSection');
     if (!section) return;
-    if (!d || !d.jobs || d.jobs.length === 0) {
-        section.style.display = 'none';
-        return;
-    }
-    section.style.display = 'block';
+    section.style.display = 'block';  // always visible now
 
-    document.getElementById('veeamCount').textContent = d.total;
+    d = d || {};
+    const jobs = d.jobs || [];
+    const status = d.status || {};
+    const stateEl = document.getElementById('veeamState');
+    const summary = document.getElementById('veeamSummary');
+    const list = document.getElementById('veeamJobs');
+    const count = document.getElementById('veeamCount');
+
+    // Status line — shows diagnostic info when no jobs are visible
+    const s = (status.status || '').toLowerCase();
+    const moduleUsed = status.module_used;
+    const lastTs = status.last_check_ts;
+
+    if (s === 'ok' && jobs.length > 0) {
+        stateEl.className = 'veeam-state hidden';
+    } else if (s === 'not_loaded') {
+        stateEl.className = 'veeam-state warn';
+        stateEl.innerHTML = `
+            <div class="veeam-state-title">Veeam PowerShell module not detected</div>
+            <div>The collector tried multiple ways to load <code>Veeam.Backup.PowerShell</code> but none worked. If Veeam Backup &amp; Replication is installed, it may need a restart, or the module may live in a non-standard path.</div>
+            ${status.error_message ? `<div class="veeam-state-error">${escapeHtml(status.error_message)}</div>` : ''}
+            ${lastTs ? `<div class="veeam-state-error">Last checked: ${formatDateTimeFull(lastTs)}</div>` : ''}
+        `;
+    } else if (s === 'no_jobs' || (s === 'ok' && jobs.length === 0)) {
+        stateEl.className = 'veeam-state info';
+        stateEl.innerHTML = `
+            <div class="veeam-state-title">Connected to Veeam — no backup jobs configured</div>
+            <div>The PowerShell module loaded successfully${moduleUsed ? ` (<code>${escapeHtml(moduleUsed)}</code>)` : ''} but <code>Get-VBRJob</code> returned nothing. Create a backup job in the Veeam console and it'll appear here.</div>
+        `;
+    } else if (s === 'error') {
+        stateEl.className = 'veeam-state err';
+        stateEl.innerHTML = `
+            <div class="veeam-state-title">Veeam error during last poll</div>
+            ${moduleUsed ? `<div>Loaded via: <code>${escapeHtml(moduleUsed)}</code></div>` : ''}
+            ${status.error_message ? `<div class="veeam-state-error">${escapeHtml(status.error_message)}</div>` : ''}
+        `;
+    } else if (!lastTs) {
+        stateEl.className = 'veeam-state info';
+        stateEl.innerHTML = `<div>Waiting for the first Veeam poll (takes a few minutes after startup)…</div>`;
+    } else {
+        stateEl.className = 'veeam-state hidden';
+    }
+
+    count.textContent = jobs.length;
 
     const c = d.counts || {};
-    const pills = [];
     const order = ['success', 'warning', 'failed', 'running', 'never'];
     const labels = { success: 'Success', warning: 'Warning', failed: 'Failed', running: 'Running', never: 'Never Ran' };
+    const pills = [];
     for (const k of order) {
         if ((c[k] || 0) > 0) {
             pills.push(`<span class="veeam-summary-pill ${k}"><span class="dot"></span>${c[k]} ${labels[k]}</span>`);
         }
     }
-    document.getElementById('veeamSummary').innerHTML = pills.join('');
+    summary.innerHTML = pills.join('');
 
-    const list = document.getElementById('veeamJobs');
-    list.innerHTML = d.jobs.map(j => {
+    if (jobs.length === 0) {
+        list.innerHTML = '';
+        return;
+    }
+
+    list.innerHTML = jobs.map(j => {
         const result = (j.last_result || 'never').toLowerCase();
         const cls = ['success', 'warning', 'failed', 'running'].includes(result) ? result : 'never';
         const label = (j.last_result && j.last_result !== 'None' && j.last_result !== 'NeverRan')

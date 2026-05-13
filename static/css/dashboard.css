@@ -758,6 +758,49 @@ main {
     white-space: nowrap;
 }
 
+.veeam-refresh-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-3);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-left: auto;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.15s;
+}
+.veeam-refresh-btn:hover  { background: var(--bg-hover); color: var(--text); }
+.veeam-refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.veeam-state {
+    font-size: 12px;
+    color: var(--text-2);
+    margin-bottom: 12px;
+    padding: 10px 12px;
+    background: var(--bg);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius-sm);
+}
+.veeam-state.hidden { display: none; }
+.veeam-state.warn   { color: var(--amber); border-color: rgba(245, 177, 74, 0.3); }
+.veeam-state.err    { color: var(--red);   border-color: rgba(255, 107, 107, 0.3); }
+.veeam-state.info   { color: var(--text-2); }
+.veeam-state .veeam-state-title {
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+.veeam-state .veeam-state-error {
+    font-family: 'JetBrains Mono', Consolas, monospace;
+    font-size: 10px;
+    color: var(--text-3);
+    margin-top: 4px;
+    word-break: break-word;
+}
+
 /* ── VM IP chip ──────────────────────────────────────────────────────── */
 
 .vm-ip {

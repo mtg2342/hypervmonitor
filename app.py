@@ -200,9 +200,35 @@ def veeam_backups():
             elif r in ("none", "neverran", ""): counts["never"] += 1
             else:                 counts["other"]   += 1
 
-        return jsonify({"jobs": jobs, "counts": counts, "total": len(jobs)})
+        status_row = conn.execute("SELECT * FROM veeam_status WHERE id=1").fetchone()
+        status = dict(status_row) if status_row else {}
+
+        return jsonify({
+            "jobs": jobs,
+            "counts": counts,
+            "total": len(jobs),
+            "status": status,
+        })
     finally:
         conn.close()
+
+
+@app.route("/api/veeam/refresh", methods=["POST"])
+def veeam_refresh():
+    """Trigger an immediate Veeam re-poll from the dashboard refresh button."""
+    if app.config.get("_collector_instance"):
+        try:
+            import time as _time
+            conn = get_connection()
+            try:
+                app.config["_collector_instance"]._collect_veeam(conn, _time.time())
+                conn.commit()
+            finally:
+                conn.close()
+            return jsonify({"ok": True})
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)})
+    return jsonify({"ok": False, "error": "Collector not running"})
 
 
 # ── Auto-update toggle ────────────────────────────────────────────────────────
@@ -726,6 +752,7 @@ def alerts_history():
 
 def _start_collector():
     collector = MetricCollector(DB_PATH)
+    app.config["_collector_instance"] = collector
     collector_thread = threading.Thread(target=collector.run, daemon=True, name="collector")
     collector_thread.start()
     logger.info("Metric collector started (polling every %ds)", 30)
