@@ -1643,7 +1643,7 @@ function updateVmCard(card, vm) {
 
 function refreshCharts() {
     if (currentTab === 'storage') {
-        buildDetailChart('storage', [], []);
+        buildDetailChart('storage', [], [], currentRange);
         return;
     }
 
@@ -1652,9 +1652,11 @@ function refreshCharts() {
         fetch('/api/vms/history?range=' + currentRange).then(r => r.json()),
     ])
     .then(([hostHistory, vmHistory]) => {
-        buildDetailChart(currentTab, hostHistory, vmHistory);
+        buildDetailChart(currentTab, hostHistory, vmHistory, currentRange);
     })
-    .catch(() => {});
+    .catch(() => {
+        buildDetailChart(currentTab, [], [], currentRange);
+    });
 }
 
 

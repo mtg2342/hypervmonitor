@@ -141,6 +141,7 @@ function createVmSparkCanvas(id) {
 }
 
 let detailChart = null;
+let _detailChartRange = '1h';
 
 function destroyDetailChart() {
     if (detailChart) {
@@ -151,11 +152,77 @@ function destroyDetailChart() {
 
 function formatTime(epoch) {
     const d = new Date(epoch * 1000);
+    const r = _detailChartRange;
+    if (r === '7d') {
+        return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit' });
+    }
+    if (r === '30d' || r === '4m') {
+        return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    }
     return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-function buildDetailChart(tab, historyData, vmHistoryData) {
+function showDetailChartMessage(text, sub) {
     destroyDetailChart();
+    const container = document.querySelector('.chart-container');
+    if (!container) return;
+    // Stash an overlay above the canvas; clear it on next chart build.
+    const canvas = document.getElementById('detailChart');
+    if (canvas) canvas.style.display = 'none';
+    let overlay = container.querySelector('.detail-chart-empty');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.className = 'detail-chart-empty';
+        container.appendChild(overlay);
+    }
+    overlay.innerHTML =
+        '<div class="detail-chart-empty-title">' + text + '</div>' +
+        (sub ? '<div class="detail-chart-empty-sub">' + sub + '</div>' : '');
+}
+
+function clearDetailChartMessage() {
+    const container = document.querySelector('.chart-container');
+    if (!container) return;
+    const overlay = container.querySelector('.detail-chart-empty');
+    if (overlay) overlay.remove();
+    const canvas = document.getElementById('detailChart');
+    if (canvas) canvas.style.display = '';
+}
+
+function buildDetailChart(tab, historyData, vmHistoryData, rangeKey) {
+    if (rangeKey) _detailChartRange = rangeKey;
+    destroyDetailChart();
+    clearDetailChartMessage();
+
+    // Empty-data fallback so the chart never silently shows nothing.
+    const hostEmpty = !historyData || historyData.length === 0;
+    const vmsEmpty  = !vmHistoryData || vmHistoryData.length === 0;
+    const needsHost = (tab === 'cpu');
+    const needsVm   = (tab !== 'cpu' && tab !== 'storage');
+    if (tab !== 'storage' && (
+        (needsHost && needsVm && hostEmpty && vmsEmpty) ||
+        (needsHost && !needsVm && hostEmpty) ||
+        (!needsHost && needsVm && vmsEmpty)
+    )) {
+        const longRange = (rangeKey === '7d' || rangeKey === '30d' || rangeKey === '4m');
+        if (longRange) {
+            showDetailChartMessage(
+                'No aggregated data yet for this range',
+                rangeKey === '4m'
+                    ? 'Daily roll-ups populate after the host has been up for at least one full day. Check back tomorrow, or pick a shorter range.'
+                    : 'Hourly roll-ups run once an hour. If you just started the dashboard, give it ~60 minutes to fill, or pick a shorter range (1H / 6H / 24H).'
+            );
+        } else if (needsVm && vmsEmpty) {
+            showDetailChartMessage(
+                'No VM data',
+                'This tab plots per-VM metrics. Either there are no running VMs on the host, or the Hyper-V Platform feature isn’t installed.'
+            );
+        } else {
+            showDetailChartMessage('No data available', '');
+        }
+        return;
+    }
+
     const ctx = document.getElementById('detailChart');
     if (!ctx) return;
 
