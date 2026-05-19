@@ -301,42 +301,52 @@ def init_db(db_path=None):
 
 
 def purge_old_data(conn):
+    """Purge old history rows from each category.
+
+    Each *_RETENTION_* value is a cap in hours/days. Set any of them to 0 in
+    config.py to disable purging for that category entirely — the dashboard
+    ships defaulting to 0 across the board so historical trends are never
+    lost. Permanent storage is the default.
+    """
     now = time.time()
-    raw_cutoff    = now - (RAW_RETENTION_HOURS * 3600)
-    hourly_cutoff = now - (HOURLY_RETENTION_DAYS * 86400)
-    daily_cutoff  = now - (DAILY_RETENTION_DAYS * 86400)
-    events_cutoff = now - (EVENTS_RETENTION_DAYS * 86400)
-    alert_cutoff  = now - (ALERTS_RETENTION_DAYS * 86400)
     total_deleted = 0
 
-    for table in ("host_metrics", "host_volumes", "vm_metrics"):
-        conn.execute(f"DELETE FROM {table} WHERE ts < ?", (raw_cutoff,))
+    def _purge(table, where_col, cutoff_ts):
+        nonlocal total_deleted
+        conn.execute(f"DELETE FROM {table} WHERE {where_col} < ?", (cutoff_ts,))
         total_deleted += conn.execute("SELECT changes()").fetchone()[0]
 
-    # VHD info changes slowly; keep 30 days raw
-    conn.execute("DELETE FROM vhd_info WHERE ts < ?", (hourly_cutoff,))
-    total_deleted += conn.execute("SELECT changes()").fetchone()[0]
+    if RAW_RETENTION_HOURS > 0:
+        raw_cutoff = now - (RAW_RETENTION_HOURS * 3600)
+        for table in ("host_metrics", "host_volumes", "vm_metrics"):
+            _purge(table, "ts", raw_cutoff)
 
-    for table in ("host_metrics_hourly", "vm_metrics_hourly"):
-        conn.execute(f"DELETE FROM {table} WHERE bucket_ts < ?", (hourly_cutoff,))
+    if HOURLY_RETENTION_DAYS > 0:
+        hourly_cutoff = now - (HOURLY_RETENTION_DAYS * 86400)
+        _purge("vhd_info", "ts", hourly_cutoff)
+        for table in ("host_metrics_hourly", "vm_metrics_hourly"):
+            _purge(table, "bucket_ts", hourly_cutoff)
+
+    if DAILY_RETENTION_DAYS > 0:
+        daily_cutoff = now - (DAILY_RETENTION_DAYS * 86400)
+        for table in ("host_metrics_daily", "vm_metrics_daily"):
+            _purge(table, "bucket_ts", daily_cutoff)
+
+    if EVENTS_RETENTION_DAYS > 0:
+        events_cutoff = now - (EVENTS_RETENTION_DAYS * 86400)
+        _purge("system_events", "ts_event", events_cutoff)
+        # RDP logins are tracked alongside events — when events are
+        # permanent so are RDP logins; otherwise they share the cap.
+        _purge("rdp_logins", "ts_event", events_cutoff)
+
+    if ALERTS_RETENTION_DAYS > 0:
+        alert_cutoff = now - (ALERTS_RETENTION_DAYS * 86400)
+        conn.execute(
+            "DELETE FROM alerts WHERE ts_cleared IS NOT NULL AND ts_cleared < ?",
+            (alert_cutoff,),
+        )
         total_deleted += conn.execute("SELECT changes()").fetchone()[0]
 
-    for table in ("host_metrics_daily", "vm_metrics_daily"):
-        conn.execute(f"DELETE FROM {table} WHERE bucket_ts < ?", (daily_cutoff,))
-        total_deleted += conn.execute("SELECT changes()").fetchone()[0]
-
-    conn.execute("DELETE FROM system_events WHERE ts_event < ?", (events_cutoff,))
-    total_deleted += conn.execute("SELECT changes()").fetchone()[0]
-
-    rdp_cutoff = now - (180 * 86400)  # keep 180 days of RDP logins
-    conn.execute("DELETE FROM rdp_logins WHERE ts_event < ?", (rdp_cutoff,))
-    total_deleted += conn.execute("SELECT changes()").fetchone()[0]
-
-    conn.execute(
-        "DELETE FROM alerts WHERE ts_cleared IS NOT NULL AND ts_cleared < ?",
-        (alert_cutoff,),
-    )
-    total_deleted += conn.execute("SELECT changes()").fetchone()[0]
     conn.commit()
 
     if total_deleted > VACUUM_THRESHOLD:
@@ -344,6 +354,8 @@ def purge_old_data(conn):
         logger.info("VACUUM after purging %d rows", total_deleted)
     elif total_deleted > 0:
         logger.info("Purged %d old rows", total_deleted)
+    else:
+        logger.debug("Purge tick: nothing to delete (retention permanent or no data past cutoffs)")
 
 
 def rollup_aggregates(conn):

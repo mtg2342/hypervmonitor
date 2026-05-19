@@ -18,12 +18,24 @@ EVENTLOG_MAX_EVENTS = 50        # cap events per scan
 RDP_LOOKBACK_DAYS = 30          # scan RDP logon events from this far back
 RDP_MAX_EVENTS = 500            # cap RDP login events per scan
 
-# Retention (raw → hourly → daily rollup chain)
-RAW_RETENTION_HOURS    = 48     # keep raw 30-second samples for 2 days
-HOURLY_RETENTION_DAYS  = 30     # keep hourly aggregates for 30 days
-DAILY_RETENTION_DAYS   = 120    # keep daily aggregates for ~4 months
-EVENTS_RETENTION_DAYS  = 30     # keep raw event log entries 30 days
-ALERTS_RETENTION_DAYS  = 3650   # effectively permanent (~10 years) for the Alert History tab
+# Retention — set any value to 0 to disable purging for that category
+# entirely (data kept indefinitely). The dashboard ships defaulting to
+# permanent storage so historical trends are never lost.
+#
+# Approximate storage growth at 5 VMs, 30s polling:
+#   Raw vm_metrics: ~3.8 GB / year
+#   Hourly:         ~7 MB  / year
+#   Daily:          ~300 KB/ year
+#   Events:         a few MB per year (sparse, only high-severity)
+#   Alerts/RDP:     tiny
+# SQLite copes happily with tens of GB. If storage ever becomes a
+# concern, set a positive number of hours/days here to bring the cap
+# back.
+RAW_RETENTION_HOURS    = 0   # 0 = keep all raw 30-second samples forever
+HOURLY_RETENTION_DAYS  = 0   # 0 = keep all hourly aggregates forever
+DAILY_RETENTION_DAYS   = 0   # 0 = keep all daily aggregates forever
+EVENTS_RETENTION_DAYS  = 0   # 0 = keep all event-log entries forever
+ALERTS_RETENTION_DAYS  = 0   # 0 = keep all alert history forever
 VACUUM_THRESHOLD       = 10000  # run VACUUM after deleting this many rows
 
 FLASK_HOST = "127.0.0.1"

@@ -158,17 +158,42 @@ Uses `Microsoft.Update.Session` COM object — slow (can take 30+ seconds) but a
 
 ### Retention & rollup chain
 
-The host accumulates data over months. To keep the database small, raw 30-second samples are rolled up into hourly and daily aggregate tables:
+Raw 30-second samples are rolled up into hourly and daily aggregate tables, but **by default nothing is ever deleted** — the dashboard ships with all retention caps set to 0 (= keep forever). Long-term trends, year-over-year comparisons, and one-off forensic digs all stay possible without any maintenance.
 
-| Table | Granularity | Retention |
+| Table | Granularity | Default retention |
 |---|---|---|
-| `host_metrics`, `vm_metrics` | 30 seconds (raw) | 48 hours |
-| `host_metrics_hourly`, `vm_metrics_hourly` | 1 hour (avg + max) | 30 days |
-| `host_metrics_daily`, `vm_metrics_daily` | 1 day (avg + max) | 120 days (~4 months) |
-| `system_events` | per event | 30 days |
-| `alerts` (cleared) | per alert | 90 days |
+| `host_metrics`, `vm_metrics`, `host_volumes` | 30 seconds (raw) | **Forever** |
+| `host_metrics_hourly`, `vm_metrics_hourly` | 1 hour (avg + max) | **Forever** |
+| `host_metrics_daily`, `vm_metrics_daily` | 1 day (avg + max) | **Forever** |
+| `vhd_info` | per snapshot | **Forever** |
+| `system_events` | per event | **Forever** |
+| `rdp_logins` | per login | **Forever** |
+| `alerts` (cleared) | per alert | **Forever** |
 
-The rollup job (`rollup_aggregates()` in `db.py`) runs every hour. It looks for any completed hour/day not already aggregated, computes averages and maximums from the source table, and inserts into the rollup table. Raw rows older than 48h are then purged.
+If storage ever becomes a concern, edit `config.py`:
+
+```python
+RAW_RETENTION_HOURS    = 0   # 0 = forever, or set hours
+HOURLY_RETENTION_DAYS  = 0   # 0 = forever, or set days
+DAILY_RETENTION_DAYS   = 0
+EVENTS_RETENTION_DAYS  = 0
+ALERTS_RETENTION_DAYS  = 0
+```
+
+Any positive value puts that category back on a sliding-window cap. Setting all of them to positive numbers restores a bounded-storage configuration.
+
+**Storage footprint** at 5 VMs running 24/7:
+
+| Category | Growth |
+|---|---|
+| Raw `vm_metrics` (30s) | ~3.8 GB / year |
+| Hourly aggregates | ~7 MB / year |
+| Daily aggregates | ~300 KB / year |
+| Events, alerts, RDP | a few MB / year (sparse) |
+
+SQLite handles tens of GB happily; even after a decade you're looking at ~40 GB total, well within reach of any modern host disk.
+
+The rollup job (`rollup_aggregates()` in `db.py`) still runs every hour. It looks for any completed hour/day not already aggregated, computes averages and maximums from the source table, and inserts into the rollup table. Raw rows are no longer purged after rollup — they coexist with the aggregates so you have both granularities available.
 
 **Query routing** (in `app.py`):
 
