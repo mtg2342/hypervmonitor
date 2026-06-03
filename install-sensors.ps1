@@ -83,6 +83,47 @@ if (Test-Path $exe) {
     }
 }
 
+# ── Step 4.5: pre-enable WMI provider in LHM config ─────────────────────────
+# LHM ships with WMI provider OFF by default. Without it the dashboard can't
+# read any temperatures from LHM at all. Writing the .config file before
+# launching LHM is the most reliable way to flip this on — covers both the
+# newer "wmiProvider" and the older "mainForm.PluginWmiEnabled" key names so
+# different LHM versions all pick it up.
+$configPath = Join-Path $installPath 'LibreHardwareMonitor.config'
+Log "Writing $configPath with WMI provider enabled..."
+$configXml = @'
+<?xml version="1.0" encoding="utf-8" ?>
+<configuration>
+    <appSettings>
+        <!-- WMI provider: lets the Hyper-V Monitor dashboard read sensors -->
+        <add key="wmiProvider" value="True" />
+        <add key="mainForm.PluginWmiEnabled" value="True" />
+        <add key="mainForm.WmiEnabled" value="True" />
+
+        <!-- Quality-of-life defaults: start minimized, no nag dialogs -->
+        <add key="mainForm.MinimizeToTray" value="True" />
+        <add key="mainForm.MinimizeOnClose" value="True" />
+        <add key="mainForm.HideShowGadget" value="True" />
+
+        <!-- Enable every hardware category so CPU/GPU/MB sensors appear -->
+        <add key="mainForm.PluginCpuEnabled" value="True" />
+        <add key="mainForm.PluginGpuEnabled" value="True" />
+        <add key="mainForm.PluginMotherboardEnabled" value="True" />
+        <add key="mainForm.PluginRamEnabled" value="True" />
+        <add key="mainForm.PluginFanControllerEnabled" value="True" />
+        <add key="mainForm.PluginStorageEnabled" value="True" />
+        <add key="mainForm.PluginNetworkEnabled" value="True" />
+    </appSettings>
+</configuration>
+'@
+try {
+    Set-Content -Path $configPath -Value $configXml -Encoding UTF8 -Force
+    Log "WMI provider enabled in config."
+} catch {
+    Log ("WARNING: could not write LHM config: {0}" -f $_.Exception.Message)
+    Log "  -> You may need to right-click the LHM tray icon and tick Options -> WMI manually."
+}
+
 # ── Step 5: scheduled task for auto-start at logon ──────────────────────────
 Log "Registering auto-start scheduled task '$taskName' ..."
 try {

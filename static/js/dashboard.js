@@ -1657,14 +1657,18 @@ function updateTemperatures(sensors) {
         const c = (typeof s.c === 'number') ? s.c : parseFloat(s.c);
         const meta = TEMP_TYPE_LABELS[s.t] || { icon: '?', label: s.t || 'Sensor' };
         const cls  = tempColorClass(c, s.t);
+        // Full untruncated detail on hover — useful when the model name is
+        // long (most NVMe / OEM SSDs) and the pill has to ellipsis it.
+        const fullName = s.n || meta.label;
+        const tooltip  = `${fullName} — ${meta.label} (source: ${s.s || 'sensor'})`;
         return `
-            <div class="temp-pill ${cls}" title="${escapeHtml(meta.label)} · ${escapeHtml(s.s || 'sensor')}">
+            <div class="temp-pill ${cls}" title="${escapeHtml(tooltip)}">
                 <span class="temp-pill-icon">${meta.icon}</span>
                 <div class="temp-pill-body">
-                    <div class="temp-pill-name">${escapeHtml(s.n || meta.label)}</div>
+                    <div class="temp-pill-name">${escapeHtml(fullName)}</div>
                     <div class="temp-pill-source">${escapeHtml(s.s || '')}</div>
                 </div>
-                <span class="temp-pill-value">${isFinite(c) ? c.toFixed(1) : '--'}<span class="unit">°C</span></span>
+                <span class="temp-pill-value">${isFinite(c) ? c.toFixed(1) : '--'}<span class="unit"> °C</span></span>
             </div>
         `;
     }).join('');

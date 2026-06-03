@@ -376,7 +376,18 @@ try {
             if ($rc -and $rc.Temperature -ne $null) {
                 $c = [double]$rc.Temperature
                 if (Test-Plausible $c) {
-                    $name = if ($d.FriendlyName) { $d.FriendlyName } else { "Disk $($d.DeviceId)" }
+                    # Clean up the disk name:
+                    #   1. Prefer Model when it's something readable.
+                    #   2. Strip OEM suffix codes like "-1BC1AABHA" off Micron drives.
+                    #   3. Prefix the manufacturer when FriendlyName is just a model code.
+                    $name = if ($d.FriendlyName) { $d.FriendlyName.Trim() } else { "Disk $($d.DeviceId)" }
+                    $name = $name -replace '\s*-\s*[A-Z0-9]{6,}\s*$', ''   # strip OEM suffix codes
+                    # If the cleaned name starts with a Micron OEM code (MTFD*), prefix "Micron"
+                    if ($name -match '^MTFD' -and $d.Manufacturer) {
+                        $name = "$($d.Manufacturer.Trim()) $name"
+                    }
+                    # Final length cap so the pill never gets absurdly wide
+                    if ($name.Length -gt 48) { $name = $name.Substring(0, 45) + '...' }
                     $sensors += @{ t = 'disk'; n = $name; c = [Math]::Round($c, 1); s = 'SMART' }
                     $diag.smart.count++
                 }
