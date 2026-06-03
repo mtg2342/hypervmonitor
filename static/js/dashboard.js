@@ -304,6 +304,75 @@ function bindSensorInstall() {
                 btn.textContent = original;
             });
     });
+
+    // Debug button — runs the scan right now and dumps raw output
+    const dbg = document.getElementById('sensorDebugBtn');
+    if (dbg) {
+        dbg.addEventListener('click', () => {
+            const status = document.getElementById('sensorInstallStatus');
+            const orig = dbg.textContent;
+            dbg.disabled = true;
+            dbg.textContent = 'Scanning…';
+            status.className = 'sensor-install-status warn';
+            status.textContent = 'Running temperature scan…';
+
+            fetch('/api/sensors/debug')
+                .then(r => r.json())
+                .then(d => {
+                    const lines = [];
+                    lines.push('Sensors found: ' + (d.sensor_count != null ? d.sensor_count : (d.sensors || []).length));
+                    if (d.error) lines.push('Top-level error: ' + d.error);
+                    lines.push('');
+                    lines.push('── Per-source diagnostics ──');
+                    const diag = d.diagnostics || {};
+                    for (const key of ['acpi', 'smart', 'lhm', 'ohm']) {
+                        const e = diag[key] || {};
+                        let line = key.toUpperCase().padEnd(6) + ' ';
+                        if (!e.tried) {
+                            line += 'not tried';
+                        } else if (e.error) {
+                            line += 'ERROR — ' + e.error;
+                        } else {
+                            line += (e.count || 0) + ' sensor(s)';
+                            if (key === 'smart' && e.disks != null) {
+                                line += ' (' + e.disks + ' disk' + (e.disks === 1 ? '' : 's') + ' scanned)';
+                            }
+                        }
+                        lines.push(line);
+                    }
+                    lines.push('');
+                    if ((d.sensors || []).length) {
+                        lines.push('── Sensor list ──');
+                        for (const s of d.sensors) {
+                            lines.push(
+                                String(s.t || '?').padEnd(12) +
+                                String(s.s || '?').padEnd(6) +
+                                String(s.c != null ? s.c.toFixed(1) + '°C' : '--').padEnd(8) +
+                                (s.n || '')
+                            );
+                        }
+                    } else {
+                        lines.push('No sensors returned by any source.');
+                        lines.push('');
+                        lines.push('Common causes:');
+                        lines.push('  • LHM/OHM not running (install via button above)');
+                        lines.push('  • Storage is behind a RAID controller that hides SMART');
+                        lines.push('  • Enterprise board with no ACPI thermal zones exposed');
+                    }
+                    status.className = d.ok ? 'sensor-install-status warn' : 'sensor-install-status err';
+                    status.textContent = lines.join('\n');
+                    fetchSensorStatus();
+                })
+                .catch(e => {
+                    status.className = 'sensor-install-status err';
+                    status.textContent = 'Debug call failed: ' + (e && e.message ? e.message : e);
+                })
+                .finally(() => {
+                    dbg.disabled = false;
+                    dbg.textContent = orig;
+                });
+        });
+    }
 }
 
 

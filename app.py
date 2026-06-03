@@ -400,6 +400,33 @@ def sensors_status():
         conn.close()
 
 
+@app.route("/api/sensors/debug")
+def sensors_debug():
+    """Run the temperature scan synchronously and return the raw result —
+    sensors found, per-source diagnostics, and any error messages.
+
+    Used by the "Debug" button in Settings → Sensor Sources to show the
+    user exactly what each detection source returned (or why it failed)
+    without waiting for the next 30-second poll.
+    """
+    collector = app.config.get("_collector_instance")
+    if not collector:
+        return jsonify({"ok": False, "error": "Collector not running"})
+    try:
+        sensors = collector._collect_all_temperatures()
+        diag = getattr(collector, "last_temp_diagnostics", None) or {}
+        return jsonify({
+            "ok": True,
+            "sensors": sensors,
+            "sensor_count": len(sensors),
+            "diagnostics": diag.get("diagnostics") or {},
+            "error": diag.get("error"),
+        })
+    except Exception as e:
+        logger.exception("Sensors debug failed")
+        return jsonify({"ok": False, "error": str(e)})
+
+
 @app.route("/api/sensors/install", methods=["POST"])
 def sensors_install():
     """Download and install LibreHardwareMonitor by running install-sensors.ps1.

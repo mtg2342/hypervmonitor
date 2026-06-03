@@ -77,6 +77,7 @@ class MetricCollector:
         self._prev_net = {}
         self._poll_count = 0
         self._stop_event = threading.Event()
+        self.last_temp_diagnostics = {"sensors": [], "diagnostics": {}, "error": None}
 
     def run(self):
         while not self._stop_event.is_set():
@@ -327,113 +328,217 @@ class MetricCollector:
             return None
         return max(vals) if vals else None
 
+    # ── Temperature scan script (encoded so shell quoting can't break it) ───
+    # Returns a JSON object: { sensors: [...], diagnostics: {...} }
+    # `diagnostics` records per-source: tried, count, error.
+    _TEMP_SCRIPT = r"""
+$ErrorActionPreference = 'Continue'
+$sensors = @()
+$diag = @{
+    acpi  = @{ tried = $false; count = 0; error = $null }
+    smart = @{ tried = $false; count = 0; error = $null; disks = 0 }
+    lhm   = @{ tried = $false; count = 0; error = $null }
+    ohm   = @{ tried = $false; count = 0; error = $null }
+}
+
+function Test-Plausible($v) {
+    if ($null -eq $v) { return $false }
+    try { $d = [double]$v } catch { return $false }
+    return ($d -gt 10 -and $d -lt 120)
+}
+
+# ── 1. CPU via ACPI thermal zones ──────────────────────────────────────────
+$diag.acpi.tried = $true
+try {
+    $i = 0
+    foreach ($z in (Get-CimInstance -Namespace 'root\WMI' -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction Stop)) {
+        try {
+            $c = [double](($z.CurrentTemperature - 2732) / 10.0)
+            if (Test-Plausible $c) {
+                $sensors += @{ t = 'cpu'; n = "Thermal Zone $i"; c = [Math]::Round($c, 1); s = 'ACPI' }
+                $diag.acpi.count++
+            }
+        } catch {}
+        $i++
+    }
+} catch {
+    $diag.acpi.error = $_.Exception.Message
+}
+
+# ── 2. Disk temperatures via SMART (Get-StorageReliabilityCounter) ─────────
+$diag.smart.tried = $true
+try {
+    $disks = @(Get-PhysicalDisk -ErrorAction Stop)
+    $diag.smart.disks = $disks.Count
+    foreach ($d in $disks) {
+        try {
+            $rc = $d | Get-StorageReliabilityCounter -ErrorAction Stop
+            if ($rc -and $rc.Temperature -ne $null) {
+                $c = [double]$rc.Temperature
+                if (Test-Plausible $c) {
+                    $name = if ($d.FriendlyName) { $d.FriendlyName } else { "Disk $($d.DeviceId)" }
+                    $sensors += @{ t = 'disk'; n = $name; c = [Math]::Round($c, 1); s = 'SMART' }
+                    $diag.smart.count++
+                }
+            }
+        } catch {}
+    }
+} catch {
+    $diag.smart.error = $_.Exception.Message
+}
+
+# ── 3. LibreHardwareMonitor (CPU, disk, GPU, motherboard) ──────────────────
+$diag.lhm.tried = $true
+try {
+    $temps = Get-CimInstance -Namespace 'root\LibreHardwareMonitor' -ClassName Sensor -ErrorAction Stop |
+             Where-Object { $_.SensorType -eq 'Temperature' }
+    foreach ($s in $temps) {
+        try {
+            if (-not (Test-Plausible $s.Value)) { continue }
+            $parent = "$($s.Parent)"
+            $sname  = "$($s.Name)"
+            $type   = 'motherboard'
+            if     ($parent -match '(?i)cpu|amdcpu|intelcpu')           { $type = 'cpu' }
+            elseif ($parent -match '(?i)gpu|nvidia|amd|geforce|radeon') { $type = 'gpu' }
+            elseif ($parent -match '(?i)hdd|ssd|nvme|disk')             { $type = 'disk' }
+            elseif ($sname  -match '(?i)cpu|core|package')              { $type = 'cpu' }
+            elseif ($sname  -match '(?i)gpu|graphics')                  { $type = 'gpu' }
+            elseif ($sname  -match '(?i)hdd|ssd|nvme|drive')            { $type = 'disk' }
+
+            $already = $false
+            foreach ($e in $sensors) {
+                if ($e.t -eq $type -and $e.n -eq $sname) { $already = $true; break }
+            }
+            if (-not $already) {
+                $sensors += @{ t = $type; n = $sname; c = [Math]::Round([double]$s.Value, 1); s = 'LHM' }
+                $diag.lhm.count++
+            }
+        } catch {}
+    }
+} catch {
+    $diag.lhm.error = $_.Exception.Message
+}
+
+# ── 4. OpenHardwareMonitor (legacy) ────────────────────────────────────────
+$diag.ohm.tried = $true
+try {
+    $temps = Get-CimInstance -Namespace 'root\OpenHardwareMonitor' -ClassName Sensor -ErrorAction Stop |
+             Where-Object { $_.SensorType -eq 'Temperature' }
+    foreach ($s in $temps) {
+        try {
+            if (-not (Test-Plausible $s.Value)) { continue }
+            $parent = "$($s.Parent)"
+            $sname  = "$($s.Name)"
+            $type   = 'motherboard'
+            if     ($parent -match '(?i)cpu')      { $type = 'cpu' }
+            elseif ($parent -match '(?i)gpu')      { $type = 'gpu' }
+            elseif ($parent -match '(?i)hdd|ssd')  { $type = 'disk' }
+            elseif ($sname  -match '(?i)cpu|core') { $type = 'cpu' }
+            elseif ($sname  -match '(?i)gpu')      { $type = 'gpu' }
+            elseif ($sname  -match '(?i)hdd|ssd')  { $type = 'disk' }
+
+            $already = $false
+            foreach ($e in $sensors) {
+                if ($e.t -eq $type -and $e.n -eq $sname) { $already = $true; break }
+            }
+            if (-not $already) {
+                $sensors += @{ t = $type; n = $sname; c = [Math]::Round([double]$s.Value, 1); s = 'OHM' }
+                $diag.ohm.count++
+            }
+        } catch {}
+    }
+} catch {
+    $diag.ohm.error = $_.Exception.Message
+}
+
+@{ sensors = $sensors; diagnostics = $diag } | ConvertTo-Json -Compress -Depth 4
+"""
+
+    def _run_temp_script(self, timeout=25):
+        """Run the temperature scan via -EncodedCommand for safety, return the
+        parsed dict OR (None, error_message) for diagnostic purposes."""
+        try:
+            import base64
+            encoded = base64.b64encode(self._TEMP_SCRIPT.encode("utf-16-le")).decode("ascii")
+            result = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-NonInteractive",
+                 "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
+                capture_output=True, text=True, timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return None, "PowerShell timed out"
+        except Exception as e:
+            return None, str(e)
+        if result.returncode != 0:
+            return None, (result.stderr or "")[:500] or f"exit code {result.returncode}"
+        stdout = (result.stdout or "").strip()
+        if not stdout:
+            return None, "empty stdout"
+        try:
+            return json.loads(stdout), None
+        except json.JSONDecodeError as e:
+            return None, f"JSON parse error: {e}; raw output (truncated): {stdout[:300]}"
+
     def _collect_all_temperatures(self):
         """Gather every temperature sensor we can find on the host.
 
         Returns a list of {t: type, n: name, c: celsius, s: source} dicts:
           t = 'cpu' | 'disk' | 'gpu' | 'motherboard'
-          n = friendly sensor name (e.g. 'CPU Package #0', 'NVMe SSD 1TB')
-          c = current temperature in Celsius (float)
+          n = friendly sensor name
+          c = current temperature in Celsius
           s = which provider gave us the reading
 
-        Sources tried, in order of preference:
-          - CPU:  ACPI thermal zones → LibreHardwareMonitor → OpenHardwareMonitor
-          - Disk: Get-StorageReliabilityCounter (SMART, built into Windows)
-                  → LibreHardwareMonitor → OpenHardwareMonitor
-          - GPU:  LibreHardwareMonitor → OpenHardwareMonitor (no built-in source)
-          - Motherboard: LibreHardwareMonitor → OpenHardwareMonitor
+        Stores the most recent diagnostics dict on self.last_temp_diagnostics
+        so /api/sensors/debug can surface it.
 
-        Empty list when nothing reported. Plausible-range filter (10–120 °C)
-        applied to every reading so faulty sensors don't poison the data.
+        Plausible-range filter (10–120 °C) applied to every reading so faulty
+        sensors don't poison the data.
         """
-        script = (
-            "$out = @(); "
-            "$plausible = { param($v) ($v -is [double] -or $v -is [int] -or $v -is [single]) -and $v -gt 10 -and $v -lt 120 }; "
-
-            # ── CPU via ACPI thermal zones ──
-            "try { "
-            "  $i = 0; "
-            "  foreach ($z in (Get-CimInstance -Namespace 'root\\WMI' -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction Stop)) { "
-            "    $c = ($z.CurrentTemperature - 2732) / 10.0; "
-            "    if (& $plausible $c) { "
-            "      $out += @{ t='cpu'; n=\"Thermal Zone $i\"; c=[Math]::Round($c,1); s='ACPI' } "
-            "    }; "
-            "    $i++ "
-            "  } "
-            "} catch {}; "
-
-            # ── Disk temperatures via SMART (Get-StorageReliabilityCounter) ──
-            "try { "
-            "  $disks = Get-PhysicalDisk -ErrorAction Stop; "
-            "  foreach ($d in $disks) { "
-            "    try { "
-            "      $rc = $d | Get-StorageReliabilityCounter -ErrorAction Stop; "
-            "      if ($rc -and $rc.Temperature -ne $null) { "
-            "        $c = [double]$rc.Temperature; "
-            "        if (& $plausible $c) { "
-            "          $name = if ($d.FriendlyName) { $d.FriendlyName } else { \"Disk $($d.DeviceId)\" }; "
-            "          $out += @{ t='disk'; n=$name; c=[Math]::Round($c,1); s='SMART' } "
-            "        } "
-            "      } "
-            "    } catch {} "
-            "  } "
-            "} catch {}; "
-
-            # ── Everything else via LibreHardwareMonitor (CPU, disk, GPU, motherboard) ──
-            "try { "
-            "  $sensors = Get-CimInstance -Namespace 'root\\LibreHardwareMonitor' -ClassName Sensor -ErrorAction Stop | "
-            "             Where-Object { $_.SensorType -eq 'Temperature' }; "
-            "  foreach ($s in $sensors) { "
-            "    if (-not (& $plausible $s.Value)) { continue }; "
-            "    $parent = $s.Parent; "
-            "    $type = 'motherboard'; "
-            "    if     ($parent -match '(?i)cpu|amdcpu|intelcpu')      { $type = 'cpu' } "
-            "    elseif ($parent -match '(?i)gpu|nvidia|amd|geforce|radeon') { $type = 'gpu' } "
-            "    elseif ($parent -match '(?i)hdd|ssd|nvme|disk')        { $type = 'disk' } "
-            "    elseif ($s.Name -match '(?i)cpu|core|package')         { $type = 'cpu' } "
-            "    elseif ($s.Name -match '(?i)gpu|graphics')             { $type = 'gpu' } "
-            "    elseif ($s.Name -match '(?i)hdd|ssd|nvme|drive')       { $type = 'disk' }; "
-            # Deduplicate against ACPI/SMART entries with the same name
-            "    $name = $s.Name; "
-            "    $already = $false; "
-            "    foreach ($e in $out) { if ($e.t -eq $type -and $e.n -eq $name) { $already = $true; break } }; "
-            "    if (-not $already) { "
-            "      $out += @{ t=$type; n=$name; c=[Math]::Round([double]$s.Value,1); s='LHM' } "
-            "    } "
-            "  } "
-            "} catch {}; "
-
-            # ── Fallback: OpenHardwareMonitor (same logic) ──
-            "try { "
-            "  $sensors = Get-CimInstance -Namespace 'root\\OpenHardwareMonitor' -ClassName Sensor -ErrorAction Stop | "
-            "             Where-Object { $_.SensorType -eq 'Temperature' }; "
-            "  foreach ($s in $sensors) { "
-            "    if (-not (& $plausible $s.Value)) { continue }; "
-            "    $parent = $s.Parent; "
-            "    $type = 'motherboard'; "
-            "    if     ($parent -match '(?i)cpu')        { $type = 'cpu' } "
-            "    elseif ($parent -match '(?i)gpu')        { $type = 'gpu' } "
-            "    elseif ($parent -match '(?i)hdd|ssd')    { $type = 'disk' } "
-            "    elseif ($s.Name -match '(?i)cpu|core')   { $type = 'cpu' } "
-            "    elseif ($s.Name -match '(?i)gpu')        { $type = 'gpu' } "
-            "    elseif ($s.Name -match '(?i)hdd|ssd')    { $type = 'disk' }; "
-            "    $name = $s.Name; "
-            "    $already = $false; "
-            "    foreach ($e in $out) { if ($e.t -eq $type -and $e.n -eq $name) { $already = $true; break } }; "
-            "    if (-not $already) { "
-            "      $out += @{ t=$type; n=$name; c=[Math]::Round([double]$s.Value,1); s='OHM' } "
-            "    } "
-            "  } "
-            "} catch {}; "
-
-            "$out | ConvertTo-Json -Compress -Depth 3"
-        )
-        data = ps_json(script, timeout=20)
-        if data is None:
+        data, err = self._run_temp_script()
+        if err and not data:
+            self.last_temp_diagnostics = {"error": err, "sensors": [], "diagnostics": {}}
+            logger.warning("Temperature scan failed: %s", err[:200])
             return []
+        sensors = []
+        diag = {}
         if isinstance(data, dict):
-            data = [data]
-        return [s for s in data if isinstance(s, dict)]
+            raw_sensors = data.get("sensors") or []
+            if isinstance(raw_sensors, dict):
+                raw_sensors = [raw_sensors]
+            sensors = [s for s in raw_sensors if isinstance(s, dict)]
+            diag = data.get("diagnostics") or {}
+        elif isinstance(data, list):
+            # Older script format — just a sensor list
+            sensors = [s for s in data if isinstance(s, dict)]
+
+        self.last_temp_diagnostics = {
+            "sensors": sensors,
+            "diagnostics": diag,
+            "error": None,
+        }
+
+        # Summarise in the log so it shows up in the running console
+        if sensors:
+            by_type = {}
+            for s in sensors:
+                by_type[s.get("t", "?")] = by_type.get(s.get("t", "?"), 0) + 1
+            summary = ", ".join(f"{k}={v}" for k, v in sorted(by_type.items()))
+            logger.info("Temperature scan: %d sensors (%s)", len(sensors), summary)
+        else:
+            # No sensors — explain what was tried
+            parts = []
+            for src in ("acpi", "smart", "lhm", "ohm"):
+                d = diag.get(src) or {}
+                if d.get("tried"):
+                    if d.get("error"):
+                        parts.append(f"{src}=ERR({(d.get('error') or '')[:80]})")
+                    else:
+                        parts.append(f"{src}=0")
+                else:
+                    parts.append(f"{src}=skipped")
+            logger.info("Temperature scan: 0 sensors (%s)", "; ".join(parts))
+
+        return sensors
 
     def _collect_volumes(self, conn, ts):
         script = (
