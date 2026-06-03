@@ -389,15 +389,58 @@ def sensors_status():
 
         return jsonify({
             "ok": True,
-            "sensors_by_type": sources_json,
-            "sensor_counts":   counts,
-            "total_sensors":   len(sensors),
-            "lhm_installed":   os.path.exists(LHM_EXE_PATH),
-            "lhm_install_path": LHM_INSTALL_PATH if os.path.exists(LHM_EXE_PATH) else None,
-            "last_updated":    row["updated_ts"] if row else None,
+            "sensors_by_type":   sources_json,
+            "sensor_counts":     counts,
+            "total_sensors":     len(sensors),
+            "lhm_installed":     os.path.exists(LHM_EXE_PATH),
+            "lhm_install_path":  LHM_INSTALL_PATH if os.path.exists(LHM_EXE_PATH) else None,
+            "lhm_running":       _is_lhm_running(),
+            "dotnet_desktop_8":  _dotnet_desktop_8_installed(),
+            "last_updated":      row["updated_ts"] if row else None,
         })
     finally:
         conn.close()
+
+
+def _is_lhm_running():
+    """True when LibreHardwareMonitor.exe is in the process list."""
+    try:
+        r = subprocess.run(
+            ["tasklist.exe", "/FI", "IMAGENAME eq LibreHardwareMonitor.exe", "/NH"],
+            capture_output=True, text=True, timeout=8,
+        )
+        return "LibreHardwareMonitor.exe" in (r.stdout or "")
+    except Exception:
+        return False
+
+
+def _dotnet_desktop_8_installed():
+    """True when .NET 8+ Desktop Runtime is on the host (any of the three
+    standard install indicators)."""
+    # Filesystem check first — fastest, no subprocess
+    shared_host = r"C:\Program Files\dotnet\shared\Microsoft.WindowsDesktop.App"
+    if os.path.isdir(shared_host):
+        try:
+            for d in os.listdir(shared_host):
+                if d and d[0].isdigit() and int(d.split(".")[0]) >= 8:
+                    return True
+        except Exception:
+            pass
+    # Fallback: dotnet --list-runtimes
+    try:
+        r = subprocess.run(
+            ["dotnet", "--list-runtimes"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if r.returncode == 0:
+            for line in (r.stdout or "").splitlines():
+                if line.startswith("Microsoft.WindowsDesktop.App"):
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[1].split(".")[0].isdigit() and int(parts[1].split(".")[0]) >= 8:
+                        return True
+    except Exception:
+        pass
+    return False
 
 
 @app.route("/api/sensors/debug")

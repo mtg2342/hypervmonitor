@@ -27,6 +27,120 @@ function Log($msg) {
 
 Log "=== LibreHardwareMonitor installer starting ==="
 
+# ── Step 0: .NET Desktop Runtime check ──────────────────────────────────────
+# LHM 0.9+ is built against .NET 8 (Windows Forms — needs the *Desktop*
+# Runtime, not just the base .NET runtime). Older Windows Server installs
+# almost never have this, so check first and install if missing — otherwise
+# launching LHM later just throws ".NET Runtime: You must install or update
+# .NET to run this application."
+function Test-DotNetDesktop8Plus {
+    # Method A: dotnet --list-runtimes (cleanest when dotnet.exe is on PATH)
+    try {
+        $out = & dotnet --list-runtimes 2>$null
+        if ($LASTEXITCODE -eq 0 -and $out) {
+            foreach ($line in $out) {
+                if ($line -match '^Microsoft\.WindowsDesktop\.App\s+([89]|1\d)\.') {
+                    return $true
+                }
+            }
+        }
+    } catch {}
+    # Method B: registry — Desktop Runtime writes its version here
+    foreach ($reg in @(
+        'HKLM:\SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App',
+        'HKLM:\SOFTWARE\WOW6432Node\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App'
+    )) {
+        try {
+            if (Test-Path $reg) {
+                $values = (Get-ItemProperty $reg).PSObject.Properties.Name
+                foreach ($v in $values) {
+                    if ($v -match '^([89]|1\d)\.') { return $true }
+                }
+            }
+        } catch {}
+    }
+    # Method C: filesystem — shared host folder for installed Desktop Runtimes
+    $sharedHost = 'C:\Program Files\dotnet\shared\Microsoft.WindowsDesktop.App'
+    if (Test-Path $sharedHost) {
+        foreach ($d in Get-ChildItem $sharedHost -Directory -ErrorAction SilentlyContinue) {
+            if ($d.Name -match '^([89]|1\d)\.') { return $true }
+        }
+    }
+    return $false
+}
+
+if (-not (Test-DotNetDesktop8Plus)) {
+    Log ".NET 8+ Desktop Runtime not detected — installing now."
+    $installedDotNet = $false
+
+    # Method A: winget (Windows Server 2022/2025 + Windows 11)
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        Log "Trying winget install Microsoft.DotNet.DesktopRuntime.8 ..."
+        try {
+            $p = Start-Process winget -ArgumentList @(
+                'install', '--id', 'Microsoft.DotNet.DesktopRuntime.8',
+                '-e', '--silent',
+                '--accept-source-agreements', '--accept-package-agreements'
+            ) -Wait -PassThru -NoNewWindow
+            if ($p.ExitCode -eq 0 -or $p.ExitCode -eq -1978335189) {
+                $installedDotNet = $true
+                Log "winget install succeeded."
+            } else {
+                Log ("winget exit code {0}, will try direct download." -f $p.ExitCode)
+            }
+        } catch {
+            Log ("winget threw: {0}" -f $_.Exception.Message)
+        }
+    } else {
+        Log "winget not present, will try direct download."
+    }
+
+    # Method B: download the official installer from Microsoft
+    if (-not $installedDotNet) {
+        # aka.ms link redirects to the latest .NET 8 Desktop Runtime build
+        $dnUrl = 'https://aka.ms/dotnet/8.0/windowsdesktop-runtime-win-x64.exe'
+        $dnExe = Join-Path $env:TEMP 'dotnet-desktop-runtime-installer.exe'
+        try {
+            Log "Downloading $dnUrl ..."
+            Invoke-WebRequest -Uri $dnUrl -OutFile $dnExe -UseBasicParsing -TimeoutSec 300
+            $sz = (Get-Item $dnExe).Length
+            Log ("Downloaded {0:N1} MB, running silent install ..." -f ($sz / 1MB))
+            $p = Start-Process -FilePath $dnExe -ArgumentList '/install', '/quiet', '/norestart' -Wait -PassThru
+            Remove-Item $dnExe -Force -ErrorAction SilentlyContinue
+            # Microsoft installer exit codes: 0 = success, 3010 = success+reboot
+            if ($p.ExitCode -eq 0 -or $p.ExitCode -eq 3010) {
+                $installedDotNet = $true
+                Log ".NET Desktop Runtime installed via direct download."
+                if ($p.ExitCode -eq 3010) {
+                    Log "NOTE: installer signalled a reboot is desirable but not required for LHM."
+                }
+            } else {
+                Log ("ERROR: .NET installer exit code {0}" -f $p.ExitCode)
+            }
+        } catch {
+            Log ("ERROR downloading/installing .NET: {0}" -f $_.Exception.Message)
+        }
+    }
+
+    if (-not $installedDotNet) {
+        Log "FATAL: could not install .NET 8 Desktop Runtime automatically."
+        Log "  Please install it manually from:"
+        Log "    https://dotnet.microsoft.com/en-us/download/dotnet/8.0"
+        Log "  Then re-run this installer."
+        exit 1
+    }
+
+    # Verify
+    if (-not (Test-DotNetDesktop8Plus)) {
+        Log "WARNING: .NET installer reported success but runtime still not detected."
+        Log "  LHM may fail to launch. A reboot might be required."
+    } else {
+        Log ".NET 8 Desktop Runtime is now installed."
+    }
+} else {
+    Log ".NET 8+ Desktop Runtime already present — good."
+}
+
 # ── Step 1: already installed? ───────────────────────────────────────────────
 if (Test-Path $exe) {
     Log "LHM already installed at $installPath, skipping download."

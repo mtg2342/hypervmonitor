@@ -240,26 +240,52 @@ function renderSensorStatus(d) {
     // Decide whether to show the install row
     const hasGpu = (counts.gpu || 0) > 0;
     const hasMb  = (counts.motherboard || 0) > 0;
+    const hasCpuLhm = (sources.cpu || []).some(s => /LHM|OHM/.test(s));
 
-    if (d.lhm_installed && (hasGpu || hasMb)) {
-        // Already installed and producing data — no install button needed
+    // Dotnet-missing case is special — LHM is installed but won't run.
+    const needsDotNet = d.lhm_installed && !d.dotnet_desktop_8 && !d.lhm_running;
+
+    if (needsDotNet) {
+        title.textContent = '.NET 8 Desktop Runtime missing';
+        detail.innerHTML =
+            'LibreHardwareMonitor is installed at <code>' +
+            escapeHtml(d.lhm_install_path || '') + '</code> but won\'t launch ' +
+            'because the host doesn\'t have the .NET 8 Desktop Runtime. ' +
+            'Clicking below will install the runtime (~60 MB download from ' +
+            'Microsoft\'s official source) and then start LHM. ' +
+            'This is usually a one-time setup.';
+        btn.textContent = 'Install .NET + Start LHM';
+        row.style.display = 'flex';
+    } else if (d.lhm_installed && (hasGpu || hasMb || hasCpuLhm)) {
+        // Installed and producing data — done
         row.style.display = 'none';
-    } else if (d.lhm_installed) {
-        // Installed but not producing GPU/MB readings yet — show with "Reinstall / Restart"
+    } else if (d.lhm_installed && d.lhm_running) {
+        // Installed and running but no LHM-sourced sensors yet — WMI probably off
         title.textContent = 'Re-run LibreHardwareMonitor';
-        detail.innerHTML = 'LHM is installed at <code>' + escapeHtml(d.lhm_install_path || '') + '</code> ' +
-            'but no GPU/motherboard sensors are reporting yet. Click below to ' +
-            'restart it. If you still see nothing after a minute, right-click the ' +
-            'LHM tray icon and tick <em>Options → WMI</em>.';
+        detail.innerHTML = 'LHM is installed and running but no GPU/motherboard ' +
+            'sensors are reporting yet. Click below to restart it (re-applies ' +
+            'the WMI-enabled config). If you still see nothing after a minute, ' +
+            'right-click the LHM tray icon and tick <em>Options → WMI</em>.';
         btn.textContent = 'Restart LHM';
+        row.style.display = 'flex';
+    } else if (d.lhm_installed) {
+        // Installed but not running — just relaunch it
+        title.textContent = 'Start LibreHardwareMonitor';
+        detail.innerHTML = 'LHM is installed at <code>' +
+            escapeHtml(d.lhm_install_path || '') + '</code> but isn\'t running. ' +
+            'Click below to start it.';
+        btn.textContent = 'Start LHM';
         row.style.display = 'flex';
     } else {
         // Not installed — full install path
         title.textContent = 'Install LibreHardwareMonitor';
         detail.innerHTML = 'Downloads the latest release from GitHub, extracts ' +
-            'it to <code>C:\\Program Files\\LibreHardwareMonitor</code>, registers ' +
-            'a logon scheduled task, and starts it now so the WMI namespace ' +
-            'becomes available immediately.';
+            'it to <code>C:\\Program Files\\LibreHardwareMonitor</code>, ' +
+            (d.dotnet_desktop_8
+                ? ''
+                : 'installs the required .NET 8 Desktop Runtime if missing, ') +
+            'registers a logon scheduled task, and starts it now so the WMI ' +
+            'namespace becomes available immediately.';
         btn.textContent = 'Install';
         row.style.display = 'flex';
     }
