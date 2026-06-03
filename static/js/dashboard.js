@@ -2,6 +2,29 @@ let currentRange = '1h';
 let currentTab = 'cpu';
 let currentView = 'dashboard';
 
+// Live cache of user-configurable alert thresholds — kept in sync with the
+// server via /api/settings so the dashboard KPI tiles can colour-code
+// against the SAME numbers used by the alert engine.
+const liveThresholds = {
+    host_temp_warning:  75,  host_temp_critical:  85,
+    disk_temp_warning:  55,  disk_temp_critical:  70,
+    gpu_temp_warning:   80,  gpu_temp_critical:   92,
+};
+
+function refreshLiveThresholds() {
+    fetch('/api/settings')
+        .then(r => r.json())
+        .then(d => {
+            const eff = d.effective || {};
+            for (const k of Object.keys(liveThresholds)) {
+                if (eff[k] != null && !isNaN(Number(eff[k]))) {
+                    liveThresholds[k] = Number(eff[k]);
+                }
+            }
+        })
+        .catch(() => {});
+}
+
 // ── Theme ───────────────────────────────────────────────────────────────────
 // Initial theme is already applied by the inline <head> script — this just
 // keeps the toggle in sync and lets the user flip it from Settings.
@@ -102,6 +125,7 @@ document.addEventListener('DOMContentLoaded', () => {
     bindVeeamRefresh();
     bindWbRefresh();
     bindHeaderRefresh();
+    refreshLiveThresholds();
     // Apply backup-toggle visibility immediately so disabled sections never
     // briefly flash before settings load.
     fetch('/api/settings')
@@ -473,6 +497,11 @@ function saveSettings() {
             return;
         }
         settingsBaseline = Object.assign({}, d.effective);
+        // Push the new thresholds into the live cache so the dashboard
+        // KPI tiles re-colour with the user's edits on the very next tick.
+        for (const k of Object.keys(liveThresholds)) {
+            if (d.effective && d.effective[k] != null) liveThresholds[k] = Number(d.effective[k]);
+        }
         populateSettingsForm(d.effective);
         updateDerivedLabels();
         updateSettingsDirty();
@@ -495,6 +524,9 @@ function resetSettings() {
                 return;
             }
             settingsBaseline = Object.assign({}, d.effective);
+            for (const k of Object.keys(liveThresholds)) {
+                if (d.effective && d.effective[k] != null) liveThresholds[k] = Number(d.effective[k]);
+            }
             populateSettingsForm(d.effective);
             updateDerivedLabels();
             updateSettingsDirty();
@@ -1617,6 +1649,9 @@ function updateHostCards(host) {
     document.getElementById('hostDiskReadVal').innerHTML  = formatRateHtml(m.disk_read_bps);
     document.getElementById('hostDiskWriteVal').innerHTML = formatRateHtml(m.disk_write_bps);
 
+    // Temperature KPI tiles — second row, only visible when a sensor reports
+    updateTempKpiTiles(m);
+
     if (sparklines.cpu && m.cpu_pct != null)  sparklines.cpu.push(m.cpu_pct);
     if (sparklines.mem && m.mem_pct != null)  sparklines.mem.push(m.mem_pct);
     if (sparklines.diskR && m.disk_read_bps != null)
@@ -1641,6 +1676,68 @@ function setKpiValue(elementId, pct, suffix) {
     else if (pct >= 85) el.classList.add('is-warn');
     else if (pct >= 50) el.classList.add('text-blue');
     else                el.classList.add('is-ok');
+}
+
+// Temperature KPI tile renderer. Pulls warning / critical thresholds straight
+// from `liveThresholds` so the colour coding matches what's configured in
+// Settings — and updates the moment the user saves a new value.
+function updateTempKpiTiles(m) {
+    const row = document.getElementById('tempCardsRow');
+    if (!row) return;
+
+    const tiles = [
+        { key: 'cpu_temp_c',  cardId: 'cardCpuTemp',  valId: 'cpuTempVal',  subId: 'cpuTempSub',
+          sparkId: 'sparkCpuTemp',  sparkKey: 'tempCpu',
+          warnKey: 'host_temp_warning', critKey: 'host_temp_critical' },
+        { key: 'disk_temp_c', cardId: 'cardDiskTemp', valId: 'diskTempVal', subId: 'diskTempSub',
+          sparkId: 'sparkDiskTemp', sparkKey: 'tempDisk',
+          warnKey: 'disk_temp_warning', critKey: 'disk_temp_critical' },
+        { key: 'gpu_temp_c',  cardId: 'cardGpuTemp',  valId: 'gpuTempVal',  subId: 'gpuTempSub',
+          sparkId: 'sparkGpuTemp',  sparkKey: 'tempGpu',
+          warnKey: 'gpu_temp_warning',  critKey: 'gpu_temp_critical' },
+    ];
+
+    let anyVisible = false;
+    for (const t of tiles) {
+        const card = document.getElementById(t.cardId);
+        const val  = m[t.key];
+        if (val == null || !isFinite(val)) {
+            card.style.display = 'none';
+            continue;
+        }
+        card.style.display = '';
+        anyVisible = true;
+
+        const warn = Number(liveThresholds[t.warnKey]);
+        const crit = Number(liveThresholds[t.critKey]);
+
+        const valEl = document.getElementById(t.valId);
+        const subEl = document.getElementById(t.subId);
+        valEl.innerHTML = val.toFixed(1) +
+            '<span style="font-size:16px;color:var(--text-3); margin-left:2px"> °C</span>';
+        valEl.className = 'card-value';
+
+        // Colour state — same scheme as the existing CPU/Memory tiles
+        let sparkColor;
+        if (val >= crit)        { valEl.classList.add('is-crit'); sparkColor = '#ff6b6b'; }
+        else if (val >= warn)   { valEl.classList.add('is-warn'); sparkColor = '#f5b14a'; }
+        else if (val < warn - 20) { valEl.classList.add('is-ok'); sparkColor = '#3ddc97'; }
+        else                    { valEl.classList.add('text-blue'); sparkColor = '#5b9dff'; }
+
+        subEl.textContent = `warn ≥ ${warn}°C · crit ≥ ${crit}°C`;
+
+        // Lazy-create the sparkline the first time we see this tile, then
+        // push one point per refresh. setMax(null) lets Chart.js auto-scale.
+        if (!sparklines[t.sparkKey]) {
+            sparklines[t.sparkKey] = createSparkline(t.sparkId, 30, sparkColor);
+        }
+        if (sparklines[t.sparkKey]) {
+            sparklines[t.sparkKey].setColor(sparkColor);
+            sparklines[t.sparkKey].push(val);
+        }
+    }
+
+    row.style.display = anyVisible ? '' : 'none';
 }
 
 function formatRateHtml(bps) {

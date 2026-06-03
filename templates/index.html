@@ -87,6 +87,28 @@
             </div>
         </section>
 
+        <!-- Temperature KPI tiles — second row, hidden when no sensors report -->
+        <section class="host-cards temp-cards-row" id="tempCardsRow" style="display:none;">
+            <div class="card host-card temp-card" id="cardCpuTemp" style="display:none;">
+                <div class="card-label">CPU TEMP</div>
+                <div class="card-value" id="cpuTempVal">--<span style="font-size:16px;color:var(--text-3)"> °C</span></div>
+                <div class="card-sub" id="cpuTempSub">—</div>
+                <canvas class="sparkline" id="sparkCpuTemp" width="220" height="32"></canvas>
+            </div>
+            <div class="card host-card temp-card" id="cardDiskTemp" style="display:none;">
+                <div class="card-label">DISK TEMP</div>
+                <div class="card-value" id="diskTempVal">--<span style="font-size:16px;color:var(--text-3)"> °C</span></div>
+                <div class="card-sub" id="diskTempSub">—</div>
+                <canvas class="sparkline" id="sparkDiskTemp" width="220" height="32"></canvas>
+            </div>
+            <div class="card host-card temp-card" id="cardGpuTemp" style="display:none;">
+                <div class="card-label">GPU TEMP</div>
+                <div class="card-value" id="gpuTempVal">--<span style="font-size:16px;color:var(--text-3)"> °C</span></div>
+                <div class="card-sub" id="gpuTempSub">—</div>
+                <canvas class="sparkline" id="sparkGpuTemp" width="220" height="32"></canvas>
+            </div>
+        </section>
+
         <!-- Temperatures (only visible when at least one sensor is reporting) -->
         <section id="tempsSection" style="display:none;">
             <div class="section-title">

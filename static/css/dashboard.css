@@ -647,6 +647,14 @@ main {
     color: var(--text-3);
 }
 
+/* ── Temperature KPI tile row (right under the host cards) ───────────── */
+
+.temp-cards-row {
+    /* Same grid template as .host-cards but room for 3 temp tiles + auto-fill */
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    margin-top: -2px;  /* hug the row above */
+}
+
 /* ── Temperatures section ────────────────────────────────────────────── */
 
 .temps-grid {
