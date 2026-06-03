@@ -133,6 +133,7 @@ def index():
 
 @app.route("/api/host/current")
 def host_current():
+    import json as _json
     conn = get_connection()
     try:
         metrics = conn.execute(
@@ -141,9 +142,22 @@ def host_current():
         volumes = conn.execute(
             "SELECT * FROM host_volumes WHERE ts = (SELECT MAX(ts) FROM host_volumes)"
         ).fetchall()
+        sensors_row = conn.execute(
+            "SELECT updated_ts, sensors_json FROM host_sensors_now WHERE id = 1"
+        ).fetchone()
+        sensors = []
+        sensors_ts = None
+        if sensors_row and sensors_row["sensors_json"]:
+            try:
+                sensors = _json.loads(sensors_row["sensors_json"]) or []
+            except Exception:
+                sensors = []
+            sensors_ts = sensors_row["updated_ts"]
         return jsonify({
-            "metrics": dict(metrics) if metrics else None,
-            "volumes": _rows_to_dicts(volumes),
+            "metrics":   dict(metrics) if metrics else None,
+            "volumes":   _rows_to_dicts(volumes),
+            "sensors":   sensors,
+            "sensors_ts": sensors_ts,
         })
     finally:
         conn.close()

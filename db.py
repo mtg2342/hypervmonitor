@@ -33,15 +33,18 @@ def init_db(db_path=None):
             mem_pct         REAL,
             disk_read_bps   REAL,
             disk_write_bps  REAL,
-            cpu_temp_c      REAL
+            cpu_temp_c      REAL,
+            disk_temp_c     REAL,
+            gpu_temp_c      REAL
         )
     """)
     c.execute("CREATE INDEX IF NOT EXISTS idx_host_ts ON host_metrics(ts)")
-    # Migration for existing installs that pre-date the cpu_temp_c column
-    try:
-        c.execute("ALTER TABLE host_metrics ADD COLUMN cpu_temp_c REAL")
-    except sqlite3.OperationalError:
-        pass
+    # Migrations for existing installs
+    for col in ("cpu_temp_c", "disk_temp_c", "gpu_temp_c"):
+        try:
+            c.execute(f"ALTER TABLE host_metrics ADD COLUMN {col} REAL")
+        except sqlite3.OperationalError:
+            pass
 
     c.execute("""
         CREATE TABLE IF NOT EXISTS host_volumes (
@@ -135,15 +138,22 @@ def init_db(db_path=None):
                 disk_write_avg  REAL,
                 cpu_temp_avg    REAL,
                 cpu_temp_max    REAL,
+                disk_temp_avg   REAL,
+                disk_temp_max   REAL,
+                gpu_temp_avg    REAL,
+                gpu_temp_max    REAL,
                 samples         INTEGER
             )
         """)
         # Migration: add temp columns to pre-existing rollup tables
-        for col in ("cpu_temp_avg", "cpu_temp_max"):
+        for col in ("cpu_temp_avg", "cpu_temp_max",
+                    "disk_temp_avg", "disk_temp_max",
+                    "gpu_temp_avg",  "gpu_temp_max"):
             try:
                 c.execute(f"ALTER TABLE host_metrics_{suffix} ADD COLUMN {col} REAL")
             except sqlite3.OperationalError:
                 pass
+
         c.execute(f"""
             CREATE TABLE IF NOT EXISTS vm_metrics_{suffix} (
                 bucket_ts        INTEGER NOT NULL,
@@ -162,6 +172,20 @@ def init_db(db_path=None):
             )
         """)
         c.execute(f"CREATE INDEX IF NOT EXISTS idx_vmh_{suffix}_ts ON vm_metrics_{suffix}(bucket_ts)")
+
+    # ── Per-sensor live readings (single row, overwritten each poll) ──
+    # We store the latest per-sensor breakdown as JSON so the dashboard
+    # can render a "Temperatures" section with one pill per sensor without
+    # blowing up storage with per-sensor history. The aggregate maxima
+    # live on host_metrics for the history charts.
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS host_sensors_now (
+            id            INTEGER PRIMARY KEY CHECK (id = 1),
+            updated_ts    REAL,
+            sensors_json  TEXT
+        )
+    """)
+    c.execute("INSERT OR IGNORE INTO host_sensors_now (id) VALUES (1)")
 
     c.execute("""
         CREATE TABLE IF NOT EXISTS system_info (
@@ -400,7 +424,9 @@ def _rollup_hourly(conn, now):
                   AVG(cpu_pct), MAX(cpu_pct),
                   AVG(mem_pct), MAX(mem_pct),
                   AVG(disk_read_bps), AVG(disk_write_bps),
-                  AVG(cpu_temp_c), MAX(cpu_temp_c),
+                  AVG(cpu_temp_c),  MAX(cpu_temp_c),
+                  AVG(disk_temp_c), MAX(disk_temp_c),
+                  AVG(gpu_temp_c),  MAX(gpu_temp_c),
                   COUNT(*)
            FROM host_metrics
            WHERE ts >= ? AND ts < ?
@@ -415,8 +441,12 @@ def _rollup_hourly(conn, now):
         conn.execute(
             """INSERT OR IGNORE INTO host_metrics_hourly
                (bucket_ts, cpu_pct_avg, cpu_pct_max, mem_pct_avg, mem_pct_max,
-                disk_read_avg, disk_write_avg, cpu_temp_avg, cpu_temp_max, samples)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                disk_read_avg, disk_write_avg,
+                cpu_temp_avg, cpu_temp_max,
+                disk_temp_avg, disk_temp_max,
+                gpu_temp_avg, gpu_temp_max,
+                samples)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             tuple(r),
         )
         count += conn.execute("SELECT changes()").fetchone()[0]
@@ -466,7 +496,9 @@ def _rollup_daily(conn, now):
                   AVG(cpu_pct_avg), MAX(cpu_pct_max),
                   AVG(mem_pct_avg), MAX(mem_pct_max),
                   AVG(disk_read_avg), AVG(disk_write_avg),
-                  AVG(cpu_temp_avg), MAX(cpu_temp_max),
+                  AVG(cpu_temp_avg),  MAX(cpu_temp_max),
+                  AVG(disk_temp_avg), MAX(disk_temp_max),
+                  AVG(gpu_temp_avg),  MAX(gpu_temp_max),
                   SUM(samples)
            FROM host_metrics_hourly
            WHERE bucket_ts >= ? AND bucket_ts < ?
@@ -480,8 +512,12 @@ def _rollup_daily(conn, now):
         conn.execute(
             """INSERT OR IGNORE INTO host_metrics_daily
                (bucket_ts, cpu_pct_avg, cpu_pct_max, mem_pct_avg, mem_pct_max,
-                disk_read_avg, disk_write_avg, cpu_temp_avg, cpu_temp_max, samples)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                disk_read_avg, disk_write_avg,
+                cpu_temp_avg, cpu_temp_max,
+                disk_temp_avg, disk_temp_max,
+                gpu_temp_avg, gpu_temp_max,
+                samples)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             tuple(r),
         )
         count += conn.execute("SELECT changes()").fetchone()[0]

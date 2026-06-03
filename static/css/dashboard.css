@@ -647,6 +647,83 @@ main {
     color: var(--text-3);
 }
 
+/* ── Temperatures section ────────────────────────────────────────────── */
+
+.temps-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 8px;
+}
+
+.temp-pill {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 10px;
+    align-items: center;
+    background: var(--bg-elev-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    transition: border-color 0.15s;
+}
+.temp-pill:hover { border-color: var(--bg-hover); }
+
+.temp-pill-icon {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    background: var(--bg-elev-2);
+    color: var(--text-2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+}
+
+.temp-pill-body { min-width: 0; }
+
+.temp-pill-name {
+    font-size: 11px;
+    color: var(--text-2);
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.temp-pill-source {
+    font-size: 9px;
+    color: var(--text-3);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-top: 2px;
+}
+
+.temp-pill-value {
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.3px;
+    white-space: nowrap;
+}
+
+.temp-pill-value .unit {
+    font-size: 11px;
+    color: var(--text-3);
+    margin-left: 2px;
+    font-weight: 500;
+}
+
+.temp-pill.ok    .temp-pill-value { color: var(--green); }
+.temp-pill.ok    .temp-pill-icon  { background: var(--green-soft); color: var(--green); }
+.temp-pill.warn  .temp-pill-value { color: var(--amber); }
+.temp-pill.warn  .temp-pill-icon  { background: var(--amber-soft); color: var(--amber); }
+.temp-pill.crit  .temp-pill-value { color: var(--red); }
+.temp-pill.crit  .temp-pill-icon  { background: var(--red-soft); color: var(--red); }
+.temp-pill.neutral .temp-pill-value { color: var(--text); }
+
 /* ── Pending Reboot banner ───────────────────────────────────────────── */
 
 .reboot-banner {

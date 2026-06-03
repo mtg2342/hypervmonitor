@@ -300,7 +300,8 @@ function updateSettingsDirty() {
     });
 
     // Cross-field: critical >= warning
-    const pairs = ['host_cpu','host_mem','host_disk','host_temp','vm_cpu','vm_mem'];
+    const pairs = ['host_cpu','host_mem','host_disk','host_temp',
+                   'disk_temp','gpu_temp','vm_cpu','vm_mem'];
     let crossWarn = '';
     for (const p of pairs) {
         const w = Number(document.querySelector(`[data-setting="${p}_warning"]`)?.value);
@@ -1376,6 +1377,7 @@ function fetchLiveData() {
     ])
     .then(([host, vms]) => {
         updateHostCards(host);
+        updateTemperatures(host.sensors || []);
         updateVmGrid(vms);
         document.getElementById('lastPoll').textContent =
             'Last update: ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -1383,6 +1385,70 @@ function fetchLiveData() {
     .catch(err => {
         document.getElementById('lastPoll').textContent = 'Connection error';
     });
+}
+
+
+// ── Temperatures ────────────────────────────────────────────────────────────
+
+const TEMP_TYPE_LABELS = {
+    cpu:         { icon: 'CPU', label: 'Processor' },
+    disk:        { icon: 'SSD', label: 'Storage' },
+    gpu:         { icon: 'GPU', label: 'Graphics' },
+    motherboard: { icon: 'MB',  label: 'Motherboard' },
+};
+
+function tempColorClass(c, t) {
+    // Different thresholds by sensor type — disks run cooler than CPUs/GPUs.
+    let warn, crit;
+    if (t === 'disk') {
+        warn = 55; crit = 70;
+    } else {
+        warn = 75; crit = 85;
+    }
+    if (c >= crit) return 'crit';
+    if (c >= warn) return 'warn';
+    if (c <= warn - 15) return 'ok';
+    return 'neutral';
+}
+
+function updateTemperatures(sensors) {
+    const section = document.getElementById('tempsSection');
+    const grid    = document.getElementById('tempsGrid');
+    const count   = document.getElementById('tempsCount');
+    if (!section || !grid) return;
+
+    if (!sensors || sensors.length === 0) {
+        section.style.display = 'none';
+        return;
+    }
+
+    section.style.display = '';
+    count.textContent = sensors.length;
+
+    // Sort: hottest first, but group by type for readability
+    const typeOrder = ['cpu', 'gpu', 'disk', 'motherboard'];
+    sensors.sort((a, b) => {
+        const ta = typeOrder.indexOf(a.t || '');
+        const tb = typeOrder.indexOf(b.t || '');
+        if (ta !== tb) return (ta < 0 ? 99 : ta) - (tb < 0 ? 99 : tb);
+        return (b.c || 0) - (a.c || 0);
+    });
+
+    grid.innerHTML = sensors.map(s => {
+        const c = (typeof s.c === 'number') ? s.c : parseFloat(s.c);
+        const meta = TEMP_TYPE_LABELS[s.t] || { icon: '?', label: s.t || 'Sensor' };
+        const cls  = tempColorClass(c, s.t);
+        return `
+            <div class="temp-pill ${cls}" title="${escapeHtml(meta.label)} · ${escapeHtml(s.s || 'sensor')}">
+                <span class="temp-pill-icon">${meta.icon}</span>
+                <div class="temp-pill-body">
+                    <div class="temp-pill-name">${escapeHtml(s.n || meta.label)}</div>
+                    <div class="temp-pill-source">${escapeHtml(s.s || '')}</div>
+                </div>
+                <span class="temp-pill-value">${isFinite(c) ? c.toFixed(1) : '--'}<span class="unit">°C</span></span>
+            </div>
+        `;
+    }).join('');
 }
 
 

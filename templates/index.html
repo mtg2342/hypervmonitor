@@ -87,6 +87,15 @@
             </div>
         </section>
 
+        <!-- Temperatures (only visible when at least one sensor is reporting) -->
+        <section id="tempsSection" style="display:none;">
+            <div class="section-title">
+                Temperatures
+                <span class="count" id="tempsCount">0</span>
+            </div>
+            <div class="temps-grid" id="tempsGrid"></div>
+        </section>
+
         <!-- Pending Reboot Banner -->
         <section class="reboot-banner" id="rebootBanner" style="display:none;">
             <div class="reboot-icon">↻</div>
@@ -454,6 +463,36 @@
                     <div class="settings-row">
                         <label>Critical ≥</label>
                         <input type="number" min="30" max="120" step="1" data-setting="host_temp_critical">
+                        <span class="settings-unit">°C</span>
+                    </div>
+                </div>
+
+                <div class="settings-group">
+                    <h3 class="settings-group-title">Disk Temperature</h3>
+                    <div class="settings-help">SSDs and HDDs run cooler than CPUs. SMART data is read via <code>Get-StorageReliabilityCounter</code> for any drive that supports it; LHM/OHM fills in for the rest.</div>
+                    <div class="settings-row">
+                        <label>Warning ≥</label>
+                        <input type="number" min="30" max="100" step="1" data-setting="disk_temp_warning">
+                        <span class="settings-unit">°C</span>
+                    </div>
+                    <div class="settings-row">
+                        <label>Critical ≥</label>
+                        <input type="number" min="30" max="100" step="1" data-setting="disk_temp_critical">
+                        <span class="settings-unit">°C</span>
+                    </div>
+                </div>
+
+                <div class="settings-group">
+                    <h3 class="settings-group-title">GPU Temperature</h3>
+                    <div class="settings-help">GPU sensors are only available when LibreHardwareMonitor or OpenHardwareMonitor is running and detects a GPU.</div>
+                    <div class="settings-row">
+                        <label>Warning ≥</label>
+                        <input type="number" min="40" max="120" step="1" data-setting="gpu_temp_warning">
+                        <span class="settings-unit">°C</span>
+                    </div>
+                    <div class="settings-row">
+                        <label>Critical ≥</label>
+                        <input type="number" min="40" max="120" step="1" data-setting="gpu_temp_critical">
                         <span class="settings-unit">°C</span>
                     </div>
                 </div>

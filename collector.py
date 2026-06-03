@@ -281,13 +281,27 @@ class MetricCollector:
         except Exception:
             mem_total = None
 
-        cpu_temp = self._collect_cpu_temperature()
+        sensors = self._collect_all_temperatures()  # list[dict]
+        cpu_max  = self._max_of_type(sensors, "cpu")
+        disk_max = self._max_of_type(sensors, "disk")
+        gpu_max  = self._max_of_type(sensors, "gpu")
+
+        # Save the live per-sensor breakdown to host_sensors_now for the dashboard
+        try:
+            conn.execute(
+                """UPDATE host_sensors_now
+                   SET updated_ts=?, sensors_json=? WHERE id=1""",
+                (ts, json.dumps(sensors) if sensors else None),
+            )
+        except Exception:
+            pass
 
         conn.execute(
             """INSERT INTO host_metrics
                (ts, cpu_pct, mem_total, mem_avail, mem_pct,
-                disk_read_bps, disk_write_bps, cpu_temp_c)
-               VALUES (?,?,?,?,?,?,?,?)""",
+                disk_read_bps, disk_write_bps,
+                cpu_temp_c, disk_temp_c, gpu_temp_c)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
             (
                 ts,
                 vals.get("cpu"),
@@ -296,80 +310,130 @@ class MetricCollector:
                 vals.get("mem_pct"),
                 vals.get("disk_r"),
                 vals.get("disk_w"),
-                cpu_temp,
+                cpu_max,
+                disk_max,
+                gpu_max,
             ),
         )
 
-    def _collect_cpu_temperature(self):
-        """Try multiple sources for CPU temperature, in order of reliability.
-
-        1. ACPI thermal zones (built into Windows; often returns 0 or
-           unsupported on enterprise hardware where the BIOS doesn't expose
-           per-CPU sensors, but tries first since no extra software needed).
-        2. LibreHardwareMonitor WMI namespace (root\\LibreHardwareMonitor) —
-           best when installed and running.
-        3. OpenHardwareMonitor WMI namespace (root\\OpenHardwareMonitor) —
-           legacy but still in use.
-
-        Returns a float in Celsius (averaged across all CPU sensors), or None
-        when no source returned a plausible reading.
-        """
-        script = (
-            "$temps = @(); "
-            "$source = $null; "
-            # 1. ACPI thermal zones — temperature in tenths of Kelvin
-            "try { "
-            "  $zones = Get-CimInstance -Namespace 'root\\WMI' "
-            "           -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction Stop; "
-            "  foreach ($z in $zones) { "
-            "    $c = ($z.CurrentTemperature - 2732) / 10.0; "
-            "    if ($c -gt 10 -and $c -lt 120) { $temps += $c } "
-            "  }; "
-            "  if ($temps.Count -gt 0) { $source = 'ACPI' } "
-            "} catch {}; "
-            # 2. LibreHardwareMonitor
-            "if ($temps.Count -eq 0) { "
-            "  try { "
-            "    $sensors = Get-CimInstance -Namespace 'root\\LibreHardwareMonitor' "
-            "               -ClassName Sensor -ErrorAction Stop | "
-            "               Where-Object { $_.SensorType -eq 'Temperature' -and "
-            "                             ($_.Name -match '(?i)CPU|Core|Package') }; "
-            "    foreach ($s in $sensors) { "
-            "      if ($s.Value -gt 10 -and $s.Value -lt 120) { $temps += [double]$s.Value } "
-            "    }; "
-            "    if ($temps.Count -gt 0) { $source = 'LibreHardwareMonitor' } "
-            "  } catch {} "
-            "}; "
-            # 3. OpenHardwareMonitor
-            "if ($temps.Count -eq 0) { "
-            "  try { "
-            "    $sensors = Get-CimInstance -Namespace 'root\\OpenHardwareMonitor' "
-            "               -ClassName Sensor -ErrorAction Stop | "
-            "               Where-Object { $_.SensorType -eq 'Temperature' -and "
-            "                             ($_.Name -match '(?i)CPU|Core|Package') }; "
-            "    foreach ($s in $sensors) { "
-            "      if ($s.Value -gt 10 -and $s.Value -lt 120) { $temps += [double]$s.Value } "
-            "    }; "
-            "    if ($temps.Count -gt 0) { $source = 'OpenHardwareMonitor' } "
-            "  } catch {} "
-            "}; "
-            "if ($temps.Count -gt 0) { "
-            "  $avg = ($temps | Measure-Object -Average).Average; "
-            "  @{ Temp = [Math]::Round($avg, 1); Source = $source } | ConvertTo-Json -Compress "
-            "} else { "
-            "  '{}' "
-            "}"
-        )
-        data = ps_json(script, timeout=10)
-        if not isinstance(data, dict):
-            return None
-        temp = data.get("Temp")
-        if temp is None:
-            return None
+    @staticmethod
+    def _max_of_type(sensors, t):
+        """Return the highest reading among sensors of a given type, or None."""
+        vals = [s.get("c") for s in sensors
+                if isinstance(s, dict) and s.get("t") == t and s.get("c") is not None]
         try:
-            return float(temp)
+            vals = [float(v) for v in vals]
         except (TypeError, ValueError):
             return None
+        return max(vals) if vals else None
+
+    def _collect_all_temperatures(self):
+        """Gather every temperature sensor we can find on the host.
+
+        Returns a list of {t: type, n: name, c: celsius, s: source} dicts:
+          t = 'cpu' | 'disk' | 'gpu' | 'motherboard'
+          n = friendly sensor name (e.g. 'CPU Package #0', 'NVMe SSD 1TB')
+          c = current temperature in Celsius (float)
+          s = which provider gave us the reading
+
+        Sources tried, in order of preference:
+          - CPU:  ACPI thermal zones → LibreHardwareMonitor → OpenHardwareMonitor
+          - Disk: Get-StorageReliabilityCounter (SMART, built into Windows)
+                  → LibreHardwareMonitor → OpenHardwareMonitor
+          - GPU:  LibreHardwareMonitor → OpenHardwareMonitor (no built-in source)
+          - Motherboard: LibreHardwareMonitor → OpenHardwareMonitor
+
+        Empty list when nothing reported. Plausible-range filter (10–120 °C)
+        applied to every reading so faulty sensors don't poison the data.
+        """
+        script = (
+            "$out = @(); "
+            "$plausible = { param($v) ($v -is [double] -or $v -is [int] -or $v -is [single]) -and $v -gt 10 -and $v -lt 120 }; "
+
+            # ── CPU via ACPI thermal zones ──
+            "try { "
+            "  $i = 0; "
+            "  foreach ($z in (Get-CimInstance -Namespace 'root\\WMI' -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction Stop)) { "
+            "    $c = ($z.CurrentTemperature - 2732) / 10.0; "
+            "    if (& $plausible $c) { "
+            "      $out += @{ t='cpu'; n=\"Thermal Zone $i\"; c=[Math]::Round($c,1); s='ACPI' } "
+            "    }; "
+            "    $i++ "
+            "  } "
+            "} catch {}; "
+
+            # ── Disk temperatures via SMART (Get-StorageReliabilityCounter) ──
+            "try { "
+            "  $disks = Get-PhysicalDisk -ErrorAction Stop; "
+            "  foreach ($d in $disks) { "
+            "    try { "
+            "      $rc = $d | Get-StorageReliabilityCounter -ErrorAction Stop; "
+            "      if ($rc -and $rc.Temperature -ne $null) { "
+            "        $c = [double]$rc.Temperature; "
+            "        if (& $plausible $c) { "
+            "          $name = if ($d.FriendlyName) { $d.FriendlyName } else { \"Disk $($d.DeviceId)\" }; "
+            "          $out += @{ t='disk'; n=$name; c=[Math]::Round($c,1); s='SMART' } "
+            "        } "
+            "      } "
+            "    } catch {} "
+            "  } "
+            "} catch {}; "
+
+            # ── Everything else via LibreHardwareMonitor (CPU, disk, GPU, motherboard) ──
+            "try { "
+            "  $sensors = Get-CimInstance -Namespace 'root\\LibreHardwareMonitor' -ClassName Sensor -ErrorAction Stop | "
+            "             Where-Object { $_.SensorType -eq 'Temperature' }; "
+            "  foreach ($s in $sensors) { "
+            "    if (-not (& $plausible $s.Value)) { continue }; "
+            "    $parent = $s.Parent; "
+            "    $type = 'motherboard'; "
+            "    if     ($parent -match '(?i)cpu|amdcpu|intelcpu')      { $type = 'cpu' } "
+            "    elseif ($parent -match '(?i)gpu|nvidia|amd|geforce|radeon') { $type = 'gpu' } "
+            "    elseif ($parent -match '(?i)hdd|ssd|nvme|disk')        { $type = 'disk' } "
+            "    elseif ($s.Name -match '(?i)cpu|core|package')         { $type = 'cpu' } "
+            "    elseif ($s.Name -match '(?i)gpu|graphics')             { $type = 'gpu' } "
+            "    elseif ($s.Name -match '(?i)hdd|ssd|nvme|drive')       { $type = 'disk' }; "
+            # Deduplicate against ACPI/SMART entries with the same name
+            "    $name = $s.Name; "
+            "    $already = $false; "
+            "    foreach ($e in $out) { if ($e.t -eq $type -and $e.n -eq $name) { $already = $true; break } }; "
+            "    if (-not $already) { "
+            "      $out += @{ t=$type; n=$name; c=[Math]::Round([double]$s.Value,1); s='LHM' } "
+            "    } "
+            "  } "
+            "} catch {}; "
+
+            # ── Fallback: OpenHardwareMonitor (same logic) ──
+            "try { "
+            "  $sensors = Get-CimInstance -Namespace 'root\\OpenHardwareMonitor' -ClassName Sensor -ErrorAction Stop | "
+            "             Where-Object { $_.SensorType -eq 'Temperature' }; "
+            "  foreach ($s in $sensors) { "
+            "    if (-not (& $plausible $s.Value)) { continue }; "
+            "    $parent = $s.Parent; "
+            "    $type = 'motherboard'; "
+            "    if     ($parent -match '(?i)cpu')        { $type = 'cpu' } "
+            "    elseif ($parent -match '(?i)gpu')        { $type = 'gpu' } "
+            "    elseif ($parent -match '(?i)hdd|ssd')    { $type = 'disk' } "
+            "    elseif ($s.Name -match '(?i)cpu|core')   { $type = 'cpu' } "
+            "    elseif ($s.Name -match '(?i)gpu')        { $type = 'gpu' } "
+            "    elseif ($s.Name -match '(?i)hdd|ssd')    { $type = 'disk' }; "
+            "    $name = $s.Name; "
+            "    $already = $false; "
+            "    foreach ($e in $out) { if ($e.t -eq $type -and $e.n -eq $name) { $already = $true; break } }; "
+            "    if (-not $already) { "
+            "      $out += @{ t=$type; n=$name; c=[Math]::Round([double]$s.Value,1); s='OHM' } "
+            "    } "
+            "  } "
+            "} catch {}; "
+
+            "$out | ConvertTo-Json -Compress -Depth 3"
+        )
+        data = ps_json(script, timeout=20)
+        if data is None:
+            return []
+        if isinstance(data, dict):
+            data = [data]
+        return [s for s in data if isinstance(s, dict)]
 
     def _collect_volumes(self, conn, ts):
         script = (
