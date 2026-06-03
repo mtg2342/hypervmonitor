@@ -570,6 +570,39 @@
             </div>
         </section>
 
+        <div class="section-title">Sensor Sources</div>
+        <section class="card sensor-sources-card">
+            <div class="appearance-detail" style="margin-bottom:14px;">
+                Temperature monitoring uses multiple data sources. Below shows
+                which categories are currently producing readings. <code>SMART</code>
+                (storage) and <code>ACPI</code> (CPU thermal zones) are built into
+                Windows. GPU and motherboard sensors require
+                <a href="https://github.com/LibreHardwareMonitor/LibreHardwareMonitor"
+                   target="_blank" rel="noopener noreferrer">LibreHardwareMonitor</a>
+                running as a startup task — the button below installs and
+                configures it in one click.
+            </div>
+
+            <div class="sensor-status-grid" id="sensorStatusGrid">
+                <div class="text-dim" style="grid-column:1/-1;text-align:center;padding:20px;">Loading…</div>
+            </div>
+
+            <div class="sensor-install-row" id="sensorInstallRow" style="display:none;">
+                <div class="appearance-text">
+                    <div class="appearance-title" id="sensorInstallTitle">Install LibreHardwareMonitor</div>
+                    <div class="appearance-detail" id="sensorInstallDetail">
+                        Downloads the latest release from GitHub, extracts it to
+                        <code>C:\Program Files\LibreHardwareMonitor</code>,
+                        registers a logon scheduled task, and starts it now so
+                        the WMI namespace becomes available immediately.
+                    </div>
+                </div>
+                <button class="btn-primary" id="sensorInstallBtn">Install</button>
+            </div>
+
+            <div class="sensor-install-status" id="sensorInstallStatus"></div>
+        </section>
+
         <div class="section-title">Appearance</div>
         <section class="card appearance-card">
             <div class="appearance-row">

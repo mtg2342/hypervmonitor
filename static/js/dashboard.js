@@ -160,8 +160,126 @@ function switchView(name) {
     if (name === 'settings') {
         fetchSettings();
         fetchUpdateInfo();
+        fetchSensorStatus();
         bindUpdateHandlers();
+        bindSensorInstall();
     }
+}
+
+
+// ── Sensor sources (Settings) ───────────────────────────────────────────────
+
+const SENSOR_TYPE_LABELS = {
+    cpu:         'CPU',
+    disk:        'Storage',
+    gpu:         'GPU',
+    motherboard: 'Motherboard',
+};
+
+function fetchSensorStatus() {
+    fetch('/api/sensors/status')
+        .then(r => r.json())
+        .then(d => renderSensorStatus(d))
+        .catch(() => {});
+}
+
+function renderSensorStatus(d) {
+    if (!d || !d.ok) return;
+    const grid = document.getElementById('sensorStatusGrid');
+    const row  = document.getElementById('sensorInstallRow');
+    const btn  = document.getElementById('sensorInstallBtn');
+    const title= document.getElementById('sensorInstallTitle');
+    const detail = document.getElementById('sensorInstallDetail');
+    if (!grid) return;
+
+    const sources = d.sensors_by_type || {};
+    const counts  = d.sensor_counts || {};
+    const items = [];
+    for (const t of ['cpu', 'disk', 'gpu', 'motherboard']) {
+        const list = sources[t] || [];
+        const detected = list.length > 0;
+        const valueText = detected
+            ? `${counts[t] || 1} sensor${(counts[t] || 1) === 1 ? '' : 's'} · ${list.join(' · ')}`
+            : 'Not detected';
+        items.push(`
+            <div class="sensor-status-item ${detected ? 'detected' : 'missing'}">
+                <span class="sensor-status-dot"></span>
+                <div class="sensor-status-text">
+                    <div class="sensor-status-name">${SENSOR_TYPE_LABELS[t]}</div>
+                    <div class="sensor-status-value">${escapeHtml(valueText)}</div>
+                </div>
+            </div>
+        `);
+    }
+    grid.innerHTML = items.join('');
+
+    // Decide whether to show the install row
+    const hasGpu = (counts.gpu || 0) > 0;
+    const hasMb  = (counts.motherboard || 0) > 0;
+
+    if (d.lhm_installed && (hasGpu || hasMb)) {
+        // Already installed and producing data — no install button needed
+        row.style.display = 'none';
+    } else if (d.lhm_installed) {
+        // Installed but not producing GPU/MB readings yet — show with "Reinstall / Restart"
+        title.textContent = 'Re-run LibreHardwareMonitor';
+        detail.innerHTML = 'LHM is installed at <code>' + escapeHtml(d.lhm_install_path || '') + '</code> ' +
+            'but no GPU/motherboard sensors are reporting yet. Click below to ' +
+            'restart it. If you still see nothing after a minute, right-click the ' +
+            'LHM tray icon and tick <em>Options → WMI</em>.';
+        btn.textContent = 'Restart LHM';
+        row.style.display = 'flex';
+    } else {
+        // Not installed — full install path
+        title.textContent = 'Install LibreHardwareMonitor';
+        detail.innerHTML = 'Downloads the latest release from GitHub, extracts ' +
+            'it to <code>C:\\Program Files\\LibreHardwareMonitor</code>, registers ' +
+            'a logon scheduled task, and starts it now so the WMI namespace ' +
+            'becomes available immediately.';
+        btn.textContent = 'Install';
+        row.style.display = 'flex';
+    }
+}
+
+let _sensorBtnBound = false;
+function bindSensorInstall() {
+    if (_sensorBtnBound) return;
+    _sensorBtnBound = true;
+    const btn = document.getElementById('sensorInstallBtn');
+    if (!btn) return;
+    btn.addEventListener('click', () => {
+        if (!confirm('Download and install LibreHardwareMonitor from its official ' +
+                     'GitHub releases? This will run as Administrator and may take ' +
+                     'up to a minute.')) return;
+        const status = document.getElementById('sensorInstallStatus');
+        btn.disabled = true;
+        const original = btn.textContent;
+        btn.textContent = 'Working…';
+        status.className = 'sensor-install-status warn';
+        status.textContent = 'Downloading and installing… (this can take up to a minute)';
+
+        fetch('/api/sensors/install', { method: 'POST' })
+            .then(r => r.json())
+            .then(d => {
+                if (d.ok) {
+                    status.className = 'sensor-install-status ok';
+                    status.textContent = (d.output || 'Done.') +
+                        '\n\nSensors will appear on the Dashboard within ~30 seconds.';
+                    setTimeout(fetchSensorStatus, 5000);
+                } else {
+                    status.className = 'sensor-install-status err';
+                    status.textContent = (d.output || d.error || 'Install failed.');
+                }
+            })
+            .catch(e => {
+                status.className = 'sensor-install-status err';
+                status.textContent = 'Network error: ' + (e && e.message ? e.message : e);
+            })
+            .finally(() => {
+                btn.disabled = false;
+                btn.textContent = original;
+            });
+    });
 }
 
 

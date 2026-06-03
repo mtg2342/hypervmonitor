@@ -1829,6 +1829,88 @@ main {
 }
 .btn-secondary:hover { background: var(--bg-hover); color: var(--text); }
 
+/* ── Sensor Sources (Settings) ─────────────────────────────────────────── */
+
+.sensor-sources-card { padding: 16px 20px; }
+
+.sensor-status-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    gap: 10px;
+    margin-bottom: 14px;
+}
+
+.sensor-status-item {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 10px;
+    align-items: center;
+    background: var(--bg);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+}
+
+.sensor-status-item.detected { border-color: rgba(61, 220, 151, 0.35); }
+.sensor-status-item.missing  { opacity: 0.7; }
+
+.sensor-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--text-3);
+    flex-shrink: 0;
+}
+.sensor-status-item.detected .sensor-status-dot { background: var(--green); }
+
+.sensor-status-text { min-width: 0; }
+
+.sensor-status-name {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-3);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    margin-bottom: 2px;
+}
+
+.sensor-status-value {
+    font-size: 12px;
+    color: var(--text);
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sensor-status-item.missing .sensor-status-value { color: var(--text-3); font-weight: 400; }
+
+.sensor-install-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border-soft);
+}
+
+.sensor-install-status {
+    margin-top: 14px;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    font-family: 'JetBrains Mono', Consolas, monospace;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 280px;
+    overflow-y: auto;
+}
+.sensor-install-status:empty { display: none; }
+.sensor-install-status.ok   { background: var(--green-soft); color: var(--green); border: 1px solid rgba(61, 220, 151, 0.25); }
+.sensor-install-status.warn { background: var(--amber-soft); color: var(--amber); border: 1px solid rgba(245, 177, 74, 0.25); }
+.sensor-install-status.err  { background: var(--red-soft);   color: var(--red);   border: 1px solid rgba(255, 107, 107, 0.25); }
+
 /* ── Appearance card ──────────────────────────────────────────────────── */
 
 .appearance-card { padding: 16px 20px; }

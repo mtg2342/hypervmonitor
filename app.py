@@ -345,6 +345,96 @@ def windows_backup_refresh():
     return jsonify({"ok": False, "error": "Collector not running"})
 
 
+# ── Sensor sources (CPU temp / disk SMART / GPU + motherboard via LHM) ───
+
+LHM_INSTALL_PATH = r"C:\Program Files\LibreHardwareMonitor"
+LHM_EXE_PATH     = os.path.join(LHM_INSTALL_PATH, "LibreHardwareMonitor.exe")
+
+
+@app.route("/api/sensors/status")
+def sensors_status():
+    """Report which sensor sources are currently producing readings, and
+    whether LibreHardwareMonitor is already installed on the host. Powers
+    the Settings → Sensor Sources panel.
+    """
+    import json as _json
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT updated_ts, sensors_json FROM host_sensors_now WHERE id = 1"
+        ).fetchone()
+        sensors = []
+        if row and row["sensors_json"]:
+            try:
+                sensors = _json.loads(row["sensors_json"]) or []
+            except Exception:
+                sensors = []
+
+        # Group by type → set of source tags ("SMART", "LHM", "ACPI", "OHM")
+        sources = {}
+        for s in sensors:
+            if not isinstance(s, dict):
+                continue
+            t = (s.get("t") or "unknown").lower()
+            src = s.get("s") or "unknown"
+            sources.setdefault(t, set()).add(src)
+        sources_json = {t: sorted(list(v)) for t, v in sources.items()}
+
+        # Count sensors per type
+        counts = {t: 0 for t in ("cpu", "disk", "gpu", "motherboard")}
+        for s in sensors:
+            t = (s.get("t") or "").lower()
+            if t in counts:
+                counts[t] += 1
+
+        return jsonify({
+            "ok": True,
+            "sensors_by_type": sources_json,
+            "sensor_counts":   counts,
+            "total_sensors":   len(sensors),
+            "lhm_installed":   os.path.exists(LHM_EXE_PATH),
+            "lhm_install_path": LHM_INSTALL_PATH if os.path.exists(LHM_EXE_PATH) else None,
+            "last_updated":    row["updated_ts"] if row else None,
+        })
+    finally:
+        conn.close()
+
+
+@app.route("/api/sensors/install", methods=["POST"])
+def sensors_install():
+    """Download and install LibreHardwareMonitor by running install-sensors.ps1.
+
+    Runs synchronously and streams the script's output back in the response
+    so the UI can show progress / errors. The script handles the
+    "already installed" case as a no-op exit.
+    """
+    script_path = os.path.join(BASE_DIR, "install-sensors.ps1")
+    if not os.path.exists(script_path):
+        return jsonify({"ok": False, "error": "install-sensors.ps1 not found in install directory"})
+
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive",
+             "-ExecutionPolicy", "Bypass", "-File", script_path],
+            capture_output=True, text=True, timeout=300,
+        )
+        output = ((result.stdout or "") + (result.stderr or "")).strip()
+        # Keep the last ~4 KB so the UI can display it
+        if len(output) > 4000:
+            output = "…\n" + output[-4000:]
+        ok = (result.returncode == 0)
+        if ok:
+            logger.info("install-sensors.ps1 completed successfully")
+        else:
+            logger.warning("install-sensors.ps1 returned %d: %s", result.returncode, output[-300:])
+        return jsonify({"ok": ok, "exit_code": result.returncode, "output": output})
+    except subprocess.TimeoutExpired:
+        return jsonify({"ok": False, "error": "Installer timed out after 5 minutes"})
+    except Exception as e:
+        logger.exception("install-sensors.ps1 launch failed")
+        return jsonify({"ok": False, "error": str(e)})
+
+
 # ── Auto-update toggle ────────────────────────────────────────────────────────
 
 AUTO_UPDATE_TASK = "HyperVMonitorAutoUpdate"
