@@ -281,10 +281,13 @@ class MetricCollector:
         except Exception:
             mem_total = None
 
+        cpu_temp = self._collect_cpu_temperature()
+
         conn.execute(
             """INSERT INTO host_metrics
-               (ts, cpu_pct, mem_total, mem_avail, mem_pct, disk_read_bps, disk_write_bps)
-               VALUES (?,?,?,?,?,?,?)""",
+               (ts, cpu_pct, mem_total, mem_avail, mem_pct,
+                disk_read_bps, disk_write_bps, cpu_temp_c)
+               VALUES (?,?,?,?,?,?,?,?)""",
             (
                 ts,
                 vals.get("cpu"),
@@ -293,8 +296,80 @@ class MetricCollector:
                 vals.get("mem_pct"),
                 vals.get("disk_r"),
                 vals.get("disk_w"),
+                cpu_temp,
             ),
         )
+
+    def _collect_cpu_temperature(self):
+        """Try multiple sources for CPU temperature, in order of reliability.
+
+        1. ACPI thermal zones (built into Windows; often returns 0 or
+           unsupported on enterprise hardware where the BIOS doesn't expose
+           per-CPU sensors, but tries first since no extra software needed).
+        2. LibreHardwareMonitor WMI namespace (root\\LibreHardwareMonitor) —
+           best when installed and running.
+        3. OpenHardwareMonitor WMI namespace (root\\OpenHardwareMonitor) —
+           legacy but still in use.
+
+        Returns a float in Celsius (averaged across all CPU sensors), or None
+        when no source returned a plausible reading.
+        """
+        script = (
+            "$temps = @(); "
+            "$source = $null; "
+            # 1. ACPI thermal zones — temperature in tenths of Kelvin
+            "try { "
+            "  $zones = Get-CimInstance -Namespace 'root\\WMI' "
+            "           -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction Stop; "
+            "  foreach ($z in $zones) { "
+            "    $c = ($z.CurrentTemperature - 2732) / 10.0; "
+            "    if ($c -gt 10 -and $c -lt 120) { $temps += $c } "
+            "  }; "
+            "  if ($temps.Count -gt 0) { $source = 'ACPI' } "
+            "} catch {}; "
+            # 2. LibreHardwareMonitor
+            "if ($temps.Count -eq 0) { "
+            "  try { "
+            "    $sensors = Get-CimInstance -Namespace 'root\\LibreHardwareMonitor' "
+            "               -ClassName Sensor -ErrorAction Stop | "
+            "               Where-Object { $_.SensorType -eq 'Temperature' -and "
+            "                             ($_.Name -match '(?i)CPU|Core|Package') }; "
+            "    foreach ($s in $sensors) { "
+            "      if ($s.Value -gt 10 -and $s.Value -lt 120) { $temps += [double]$s.Value } "
+            "    }; "
+            "    if ($temps.Count -gt 0) { $source = 'LibreHardwareMonitor' } "
+            "  } catch {} "
+            "}; "
+            # 3. OpenHardwareMonitor
+            "if ($temps.Count -eq 0) { "
+            "  try { "
+            "    $sensors = Get-CimInstance -Namespace 'root\\OpenHardwareMonitor' "
+            "               -ClassName Sensor -ErrorAction Stop | "
+            "               Where-Object { $_.SensorType -eq 'Temperature' -and "
+            "                             ($_.Name -match '(?i)CPU|Core|Package') }; "
+            "    foreach ($s in $sensors) { "
+            "      if ($s.Value -gt 10 -and $s.Value -lt 120) { $temps += [double]$s.Value } "
+            "    }; "
+            "    if ($temps.Count -gt 0) { $source = 'OpenHardwareMonitor' } "
+            "  } catch {} "
+            "}; "
+            "if ($temps.Count -gt 0) { "
+            "  $avg = ($temps | Measure-Object -Average).Average; "
+            "  @{ Temp = [Math]::Round($avg, 1); Source = $source } | ConvertTo-Json -Compress "
+            "} else { "
+            "  '{}' "
+            "}"
+        )
+        data = ps_json(script, timeout=10)
+        if not isinstance(data, dict):
+            return None
+        temp = data.get("Temp")
+        if temp is None:
+            return None
+        try:
+            return float(temp)
+        except (TypeError, ValueError):
+            return None
 
     def _collect_volumes(self, conn, ts):
         script = (

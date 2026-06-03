@@ -60,6 +60,9 @@
             <div class="card host-card" id="hostCpu">
                 <div class="card-label">CPU</div>
                 <div class="card-value" id="hostCpuVal">--<span style="font-size:16px;color:var(--text-3)">%</span></div>
+                <div class="card-sub" id="hostTempSub" style="display:none;">
+                    <span id="hostTempVal">--</span><span style="color:var(--text-3)"> °C</span>
+                </div>
                 <canvas class="sparkline" id="sparkHostCpu" width="220" height="32"></canvas>
             </div>
             <div class="card host-card" id="hostMem">
@@ -437,6 +440,21 @@
                         <label>Critical ≥</label>
                         <input type="number" min="1" max="100" step="1" data-setting="host_disk_critical">
                         <span class="settings-unit">% used</span>
+                    </div>
+                </div>
+
+                <div class="settings-group">
+                    <h3 class="settings-group-title">Host CPU Temperature</h3>
+                    <div class="settings-help">Requires a working temperature source on the host (ACPI thermal zones, LibreHardwareMonitor, or OpenHardwareMonitor). If no source returns a reading, no alert fires regardless of these values.</div>
+                    <div class="settings-row">
+                        <label>Warning ≥</label>
+                        <input type="number" min="30" max="120" step="1" data-setting="host_temp_warning">
+                        <span class="settings-unit">°C</span>
+                    </div>
+                    <div class="settings-row">
+                        <label>Critical ≥</label>
+                        <input type="number" min="30" max="120" step="1" data-setting="host_temp_critical">
+                        <span class="settings-unit">°C</span>
                     </div>
                 </div>
 

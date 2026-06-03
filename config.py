@@ -67,6 +67,8 @@ ALERT_THRESHOLDS = {
     "host_mem_critical":   95,
     "host_disk_warning":   85,
     "host_disk_critical":  95,
+    "host_temp_warning":   75,    # °C
+    "host_temp_critical":  85,    # °C
     "vm_cpu_warning":      90,
     "vm_cpu_critical":     98,
     "vm_mem_warning":      90,

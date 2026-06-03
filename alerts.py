@@ -13,6 +13,8 @@ SETTABLE_THRESHOLDS = {
     "host_mem_critical":  (1, 100),
     "host_disk_warning":  (1, 100),
     "host_disk_critical": (1, 100),
+    "host_temp_warning":  (30, 120),   # °C
+    "host_temp_critical": (30, 120),   # °C
     "vm_cpu_warning":     (1, 100),
     "vm_cpu_critical":    (1, 100),
     "vm_mem_warning":     (1, 100),
@@ -105,7 +107,7 @@ def save_settings(conn, updates):
 
     # Cross-field sanity: critical >= warning. Don't fail save — just warn.
     eff = get_settings(conn)
-    for prefix in ("host_cpu", "host_mem", "host_disk", "vm_cpu", "vm_mem"):
+    for prefix in ("host_cpu", "host_mem", "host_disk", "host_temp", "vm_cpu", "vm_mem"):
         w = eff.get(f"{prefix}_warning")
         c = eff.get(f"{prefix}_critical")
         if w is not None and c is not None and c < w:
@@ -120,11 +122,30 @@ def evaluate_alerts(conn, ts):
     _check_host_cpu(conn, ts, s)
     _check_host_mem(conn, ts, s)
     _check_disk_space(conn, ts, s)
+    _check_host_temp(conn, ts, s)
     _check_vm_cpu(conn, ts, s)
     _check_vm_mem(conn, ts, s)
     _check_vm_heartbeat(conn, ts)
     _check_pending_reboot(conn, ts)
     _check_veeam_backups(conn, ts)
+
+
+def _check_host_temp(conn, ts, s):
+    row = conn.execute(
+        "SELECT cpu_temp_c FROM host_metrics ORDER BY ts DESC LIMIT 1"
+    ).fetchone()
+    if not row or row["cpu_temp_c"] is None:
+        # No sensor reading available — nothing to alert on
+        return
+    val = row["cpu_temp_c"]
+    if val >= s["host_temp_critical"]:
+        _raise_alert(conn, ts, "critical", "host", "temperature",
+                      f"Host CPU temperature at {val:.1f}°C", val)
+    elif val >= s["host_temp_warning"]:
+        _raise_alert(conn, ts, "warning", "host", "temperature",
+                      f"Host CPU temperature at {val:.1f}°C", val)
+    else:
+        _clear_alert(conn, ts, "host", "temperature")
 
 
 def _check_pending_reboot(conn, ts):

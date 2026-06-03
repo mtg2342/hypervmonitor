@@ -300,7 +300,7 @@ function updateSettingsDirty() {
     });
 
     // Cross-field: critical >= warning
-    const pairs = ['host_cpu','host_mem','host_disk','vm_cpu','vm_mem'];
+    const pairs = ['host_cpu','host_mem','host_disk','host_temp','vm_cpu','vm_mem'];
     let crossWarn = '';
     for (const p of pairs) {
         const w = Number(document.querySelector(`[data-setting="${p}_warning"]`)?.value);
@@ -1394,6 +1394,26 @@ function updateHostCards(host) {
 
     setKpiValue('hostCpuVal', m.cpu_pct, '%');
     setKpiValue('hostMemVal', m.mem_pct, '%');
+
+    // CPU temperature: shown as a sub-line under the CPU value when the
+    // collector found a reading. Colour-coded against thresholds.
+    const tempWrap = document.getElementById('hostTempSub');
+    const tempVal = document.getElementById('hostTempVal');
+    if (tempWrap && tempVal) {
+        if (m.cpu_temp_c != null) {
+            tempVal.textContent = m.cpu_temp_c.toFixed(1);
+            tempWrap.style.display = '';
+            tempWrap.className = 'card-sub ' + (
+                m.cpu_temp_c >= 85 ? 'text-red'   :
+                m.cpu_temp_c >= 75 ? 'text-orange' :
+                m.cpu_temp_c >= 60 ? ''             :
+                'text-green'
+            );
+            tempWrap.title = 'CPU temperature — for full per-core / per-package readings, install LibreHardwareMonitor on the host.';
+        } else {
+            tempWrap.style.display = 'none';
+        }
+    }
 
     // Memory: also show "X.X GB free / Y GB total"
     const memSub = document.getElementById('hostMemSub');
