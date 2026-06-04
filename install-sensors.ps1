@@ -2,7 +2,7 @@
 # Downloads and installs LibreHardwareMonitor (LHM) so the Hyper-V Monitor
 # dashboard can read GPU and motherboard temperatures via its WMI provider.
 #
-# Triggered by the "Install LibreHardwareMonitor" button in Settings →
+# Triggered by the "Install LibreHardwareMonitor" button in Settings ->
 # Sensor Sources, or runnable manually from a PowerShell admin prompt.
 #
 # What this does:
@@ -13,7 +13,7 @@
 #      launches it at logon, minimized to the tray
 #   5. Launches it now so the WMI namespace gets populated immediately
 #
-# No third-party dependencies — everything uses built-in PowerShell cmdlets.
+# No third-party dependencies -- everything uses built-in PowerShell cmdlets.
 
 $ErrorActionPreference = 'Continue'
 
@@ -27,10 +27,10 @@ function Log($msg) {
 
 Log "=== LibreHardwareMonitor installer starting ==="
 
-# ── Step 0: .NET Desktop Runtime check ──────────────────────────────────────
-# LHM 0.9+ is built against .NET 8 (Windows Forms — needs the *Desktop*
+# -- Step 0: .NET Desktop Runtime check --------------------------------------
+# LHM 0.9+ is built against .NET 8 (Windows Forms -- needs the *Desktop*
 # Runtime, not just the base .NET runtime). Older Windows Server installs
-# almost never have this, so check first and install if missing — otherwise
+# almost never have this, so check first and install if missing -- otherwise
 # launching LHM later just throws ".NET Runtime: You must install or update
 # .NET to run this application."
 function Test-DotNetDesktop8Plus {
@@ -45,7 +45,7 @@ function Test-DotNetDesktop8Plus {
             }
         }
     } catch {}
-    # Method B: registry — Desktop Runtime writes its version here
+    # Method B: registry -- Desktop Runtime writes its version here
     foreach ($reg in @(
         'HKLM:\SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App',
         'HKLM:\SOFTWARE\WOW6432Node\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App'
@@ -59,7 +59,7 @@ function Test-DotNetDesktop8Plus {
             }
         } catch {}
     }
-    # Method C: filesystem — shared host folder for installed Desktop Runtimes
+    # Method C: filesystem -- shared host folder for installed Desktop Runtimes
     $sharedHost = 'C:\Program Files\dotnet\shared\Microsoft.WindowsDesktop.App'
     if (Test-Path $sharedHost) {
         foreach ($d in Get-ChildItem $sharedHost -Directory -ErrorAction SilentlyContinue) {
@@ -70,7 +70,7 @@ function Test-DotNetDesktop8Plus {
 }
 
 if (-not (Test-DotNetDesktop8Plus)) {
-    Log ".NET 8+ Desktop Runtime not detected — installing now."
+    Log ".NET 8+ Desktop Runtime not detected -- installing now."
     $installedDotNet = $false
 
     # Method A: winget (Windows Server 2022/2025 + Windows 11)
@@ -107,7 +107,7 @@ if (-not (Test-DotNetDesktop8Plus)) {
             $sz = (Get-Item $dnExe).Length
             Log ("Downloaded {0:N1} MB, running silent install ..." -f ($sz / 1MB))
             # /log tells the bootstrapper to write a verbose log we can inspect
-            # if the install fails — far more useful than just an exit code.
+            # if the install fails -- far more useful than just an exit code.
             $p = Start-Process -FilePath $dnExe `
                 -ArgumentList '/install', '/quiet', '/norestart', '/log', $dnLog `
                 -Wait -PassThru
@@ -154,14 +154,14 @@ if (-not (Test-DotNetDesktop8Plus)) {
         Log ".NET 8 Desktop Runtime is now installed."
     }
 } else {
-    Log ".NET 8+ Desktop Runtime already present — good."
+    Log ".NET 8+ Desktop Runtime already present -- good."
 }
 
-# ── Step 1: already installed? ───────────────────────────────────────────────
+# -- Step 1: already installed? -----------------------------------------------
 if (Test-Path $exe) {
     Log "LHM already installed at $installPath, skipping download."
 } else {
-    # ── Step 2: query latest release ─────────────────────────────────────────
+    # -- Step 2: query latest release -----------------------------------------
     Log "Fetching latest release info from GitHub..."
     try {
         $headers = @{ 'User-Agent' = 'HyperVMonitor-installer' }
@@ -178,7 +178,7 @@ if (Test-Path $exe) {
         exit 1
     }
 
-    # ── Step 3: download ────────────────────────────────────────────────────
+    # -- Step 3: download ----------------------------------------------------
     $tempZip = Join-Path $env:TEMP 'LibreHardwareMonitor-install.zip'
     Log "Downloading $($asset.browser_download_url) ..."
     try {
@@ -192,7 +192,7 @@ if (Test-Path $exe) {
         exit 1
     }
 
-    # ── Step 4: extract ─────────────────────────────────────────────────────
+    # -- Step 4: extract -----------------------------------------------------
     Log "Extracting to $installPath ..."
     try {
         if (-not (Test-Path $installPath)) {
@@ -213,48 +213,129 @@ if (Test-Path $exe) {
     }
 }
 
-# ── Step 4.5: pre-enable WMI provider in LHM config ─────────────────────────
-# LHM ships with WMI provider OFF by default. Without it the dashboard can't
-# read any temperatures from LHM at all. Writing the .config file before
-# launching LHM is the most reliable way to flip this on — covers both the
-# newer "wmiProvider" and the older "mainForm.PluginWmiEnabled" key names so
-# different LHM versions all pick it up.
-$configPath = Join-Path $installPath 'LibreHardwareMonitor.config'
-Log "Writing $configPath with WMI provider enabled..."
-$configXml = @'
-<?xml version="1.0" encoding="utf-8" ?>
-<configuration>
-    <appSettings>
-        <!-- WMI provider: lets the Hyper-V Monitor dashboard read sensors -->
-        <add key="wmiProvider" value="True" />
-        <add key="mainForm.PluginWmiEnabled" value="True" />
-        <add key="mainForm.WmiEnabled" value="True" />
+# -- Step 4.5: enable LHM's WMI provider via config patching ----------------
+# LHM stores its settings in a file it writes itself on graceful shutdown.
+# The file name + location have varied between LHM versions, so we don't
+# know a priori where it lives. Strategy:
+#   1. Boot LHM cleanly so it writes its default config wherever it likes
+#   2. Send it a close message and wait for the config to be flushed to disk
+#   3. Search common locations for the config file
+#   4. Patch mainForm.PluginWmiEnabled (and a few sibling keys) to true
+#   5. Restart LHM -- it'll read the patched config and activate the WMI plugin
+# This works for both old "PersistentSettings in install dir" and newer
+# "settings in AppData" layouts.
 
-        <!-- Quality-of-life defaults: start minimized, no nag dialogs -->
-        <add key="mainForm.MinimizeToTray" value="True" />
-        <add key="mainForm.MinimizeOnClose" value="True" />
-        <add key="mainForm.HideShowGadget" value="True" />
-
-        <!-- Enable every hardware category so CPU/GPU/MB sensors appear -->
-        <add key="mainForm.PluginCpuEnabled" value="True" />
-        <add key="mainForm.PluginGpuEnabled" value="True" />
-        <add key="mainForm.PluginMotherboardEnabled" value="True" />
-        <add key="mainForm.PluginRamEnabled" value="True" />
-        <add key="mainForm.PluginFanControllerEnabled" value="True" />
-        <add key="mainForm.PluginStorageEnabled" value="True" />
-        <add key="mainForm.PluginNetworkEnabled" value="True" />
-    </appSettings>
-</configuration>
-'@
-try {
-    Set-Content -Path $configPath -Value $configXml -Encoding UTF8 -Force
-    Log "WMI provider enabled in config."
-} catch {
-    Log ("WARNING: could not write LHM config: {0}" -f $_.Exception.Message)
-    Log "  -> You may need to right-click the LHM tray icon and tick Options -> WMI manually."
+function Find-LHMConfigFiles {
+    $candidates = @(
+        (Join-Path $installPath 'LibreHardwareMonitor.config'),
+        (Join-Path $installPath 'LibreHardwareMonitor.exe.config'),
+        (Join-Path $env:APPDATA      'LibreHardwareMonitor\LibreHardwareMonitor.config'),
+        (Join-Path $env:LOCALAPPDATA 'LibreHardwareMonitor\LibreHardwareMonitor.config'),
+        (Join-Path $env:USERPROFILE  '.LibreHardwareMonitor\LibreHardwareMonitor.config')
+    )
+    $found = @()
+    foreach ($p in $candidates) {
+        if (Test-Path $p) { $found += $p }
+    }
+    return ,$found  # comma keeps it a single-element array when only one match
 }
 
-# ── Step 5: scheduled task for auto-start at logon ──────────────────────────
+function Patch-LHMConfig($cfgPath) {
+    # Read existing XML, ensure /configuration/appSettings exists, then set
+    # mainForm.PluginWmiEnabled=true and a handful of related keys. The list
+    # is intentionally over-inclusive: LHM ignores keys it doesn't know.
+    # NOTE: hashtable keys here are case-insensitive in PowerShell -- don't
+    # add both "WmiProvider" and "wmiProvider", they collide.
+    $desiredKeys = @{
+        'mainForm.PluginWmiEnabled'           = 'true'
+        'mainForm.WmiEnabled'                 = 'true'
+        'WmiProvider'                         = 'true'
+        'mainForm.MinimizeToTray'             = 'true'
+        'mainForm.MinimizeOnClose'            = 'true'
+        'mainForm.PluginCpuEnabled'           = 'true'
+        'mainForm.PluginGpuEnabled'           = 'true'
+        'mainForm.PluginMotherboardEnabled'   = 'true'
+        'mainForm.PluginStorageEnabled'       = 'true'
+        'mainForm.PluginNetworkEnabled'       = 'true'
+    }
+    try {
+        $doc = New-Object System.Xml.XmlDocument
+        if (Test-Path $cfgPath) {
+            $doc.Load($cfgPath)
+        }
+        if (-not $doc.DocumentElement) {
+            $decl = $doc.CreateXmlDeclaration('1.0', 'utf-8', $null)
+            $doc.AppendChild($decl) | Out-Null
+            $root = $doc.CreateElement('configuration')
+            $doc.AppendChild($root) | Out-Null
+        }
+        $root = $doc.SelectSingleNode('/configuration')
+        if (-not $root) {
+            $root = $doc.CreateElement('configuration')
+            $doc.AppendChild($root) | Out-Null
+        }
+        $appSettings = $root.SelectSingleNode('appSettings')
+        if (-not $appSettings) {
+            $appSettings = $doc.CreateElement('appSettings')
+            $root.AppendChild($appSettings) | Out-Null
+        }
+        foreach ($key in $desiredKeys.Keys) {
+            $existing = $appSettings.SelectSingleNode("add[@key='$key']")
+            if ($existing) {
+                $existing.SetAttribute('value', $desiredKeys[$key])
+            } else {
+                $node = $doc.CreateElement('add')
+                $node.SetAttribute('key', $key)
+                $node.SetAttribute('value', $desiredKeys[$key])
+                $appSettings.AppendChild($node) | Out-Null
+            }
+        }
+        $doc.Save($cfgPath)
+        return $true
+    } catch {
+        Log ("  WARNING: couldn't patch {0}: {1}" -f $cfgPath, $_.Exception.Message)
+        return $false
+    }
+}
+
+# Phase A: kill any running LHM and boot a fresh instance briefly so it
+# writes its default config in whatever location this version uses.
+Log "Configuring LHM WMI: phase A (let LHM write its default config) ..."
+try {
+    Get-Process -Name LibreHardwareMonitor -ErrorAction SilentlyContinue |
+        Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+    Start-Process -FilePath $exe -ArgumentList '/MinTrayIcon' -WindowStyle Hidden
+    Start-Sleep -Seconds 6
+    # Ask LHM to close gracefully so it flushes config to disk. CloseMainWindow
+    # is cleaner than Stop-Process and gives LHM a chance to save settings.
+    $procs = Get-Process -Name LibreHardwareMonitor -ErrorAction SilentlyContinue
+    foreach ($p in $procs) {
+        try { $p.CloseMainWindow() | Out-Null } catch {}
+    }
+    Start-Sleep -Seconds 3
+    # Belt and braces: force-kill anything still hanging around
+    Get-Process -Name LibreHardwareMonitor -ErrorAction SilentlyContinue |
+        Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+} catch {
+    Log ("  WARNING in phase A: {0}" -f $_.Exception.Message)
+}
+
+# Phase B: locate the config file LHM actually wrote, and patch it
+Log "Configuring LHM WMI: phase B (patch config) ..."
+$cfgFiles = Find-LHMConfigFiles
+if ($cfgFiles.Count -eq 0) {
+    Log "  No existing LHM config found -- writing a fresh one in the install dir."
+    $cfgFiles = @( (Join-Path $installPath 'LibreHardwareMonitor.config') )
+}
+foreach ($cfg in $cfgFiles) {
+    if (Patch-LHMConfig $cfg) {
+        Log ("  Patched {0}" -f $cfg)
+    }
+}
+
+# -- Step 5: scheduled task for auto-start at logon --------------------------
 Log "Registering auto-start scheduled task '$taskName' ..."
 try {
     $action = New-ScheduledTaskAction -Execute $exe -Argument '/MinTrayIcon'
@@ -272,7 +353,7 @@ try {
     Log ("WARNING: could not register scheduled task: {0}" -f $_.Exception.Message)
 }
 
-# ── Step 6: start LHM now so its WMI provider is live ───────────────────────
+# -- Step 6: start LHM now so its WMI provider is live -----------------------
 Log "Starting LibreHardwareMonitor ..."
 $lhmAlive = $false
 try {
@@ -284,7 +365,7 @@ try {
     # die on a missing-runtime error. 4 seconds is enough in practice.
     Start-Sleep -Seconds 4
 
-    # Verify the process is still alive — this catches the silent-death case
+    # Verify the process is still alive -- this catches the silent-death case
     # where .NET wasn't actually installed despite our checks above.
     $proc = Get-Process -Name LibreHardwareMonitor -ErrorAction SilentlyContinue
     if ($proc) {
@@ -308,8 +389,51 @@ if (-not $lhmAlive) {
     exit 1
 }
 
-Log "=== Done. ==="
-Log "Sensors should appear in the dashboard within ~30 seconds."
-Log "If GPU/motherboard temps still don't appear, right-click the LHM tray icon"
-Log "and ensure Options -> WMI is ticked."
+# -- Step 7: verify WMI namespace is now live --------------------------------
+# This is the actual success criterion -- LHM running doesn't guarantee the
+# WMI provider plugin loaded. Confirm the namespace responds with sensors.
+Log "Verifying LHM WMI namespace ..."
+Start-Sleep -Seconds 4
+$wmiOk = $false
+try {
+    $probe = Get-CimInstance -Namespace 'root\LibreHardwareMonitor' `
+        -ClassName Sensor -ErrorAction Stop | Select-Object -First 1
+    if ($probe) {
+        $wmiOk = $true
+        $count = (Get-CimInstance -Namespace 'root\LibreHardwareMonitor' `
+            -ClassName Sensor -ErrorAction SilentlyContinue | Measure-Object).Count
+        Log ("LHM WMI namespace is live with {0} sensor(s)." -f $count)
+    }
+} catch {
+    Log ("  WMI probe error: {0}" -f $_.Exception.Message)
+}
+
+if ($wmiOk) {
+    Log "=== Done. ==="
+    Log "Sensors should appear in the dashboard within ~30 seconds."
+    exit 0
+}
+
+# -- Manual fallback message -------------------------------------------------
+# Auto-patch failed for this LHM version. Walk the user through the one-click
+# manual enable.
+Log ""
+Log "============================================================="
+Log "  LHM is running but its WMI provider is still OFF."
+Log ""
+Log "  This version of LHM stores the WMI setting somewhere our"
+Log "  config patcher didn't reach. Please enable it manually -- it"
+Log "  takes 5 seconds and only has to be done ONCE:"
+Log ""
+Log "    1. In the Windows system tray (bottom-right), click the ^"
+Log "       arrow to show hidden icons."
+Log "    2. Find the LibreHardwareMonitor icon (small green chip)."
+Log "    3. Right-click it -> Options -> click WMI so it gets a tick."
+Log "    4. Click Refresh in the dashboard Sensor Sources panel."
+Log ""
+Log "  LHM remembers this across restarts, so the auto-start task"
+Log "  will keep it on from now on."
+Log "============================================================="
+# Exit 0 because everything that WE control succeeded -- the install + launch
+# are fine, only the user-side tray-icon click remains.
 exit 0
