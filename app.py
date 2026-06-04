@@ -458,12 +458,35 @@ def sensors_debug():
     try:
         sensors = collector._collect_all_temperatures()
         diag = getattr(collector, "last_temp_diagnostics", None) or {}
+        # Environment checks — these surface the *cause* of empty results
+        # (Invalid namespace usually means LHM isn't running or .NET is missing)
+        env = {
+            "lhm_installed":    os.path.exists(LHM_EXE_PATH),
+            "lhm_install_path": LHM_INSTALL_PATH if os.path.exists(LHM_EXE_PATH) else None,
+            "lhm_running":      _is_lhm_running(),
+            "dotnet_desktop_8": _dotnet_desktop_8_installed(),
+        }
+        # Probe whether the LHM WMI namespace itself exists (separately from
+        # whether it returned data). Helps distinguish "LHM dead" from
+        # "LHM alive but WMI plugin off".
+        try:
+            r = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                 "try { Get-CimInstance -Namespace 'root\\LibreHardwareMonitor' -ClassName Sensor "
+                 "-ErrorAction Stop | Select-Object -First 1 | Out-Null; 'yes' } "
+                 "catch { 'no' }"],
+                capture_output=True, text=True, timeout=10,
+            )
+            env["lhm_wmi_namespace"] = (r.stdout or "").strip().lower().endswith("yes")
+        except Exception:
+            env["lhm_wmi_namespace"] = False
         return jsonify({
             "ok": True,
-            "sensors": sensors,
+            "sensors":      sensors,
             "sensor_count": len(sensors),
-            "diagnostics": diag.get("diagnostics") or {},
-            "error": diag.get("error"),
+            "diagnostics":  diag.get("diagnostics") or {},
+            "error":        diag.get("error"),
+            "env":          env,
         })
     except Exception as e:
         logger.exception("Sensors debug failed")

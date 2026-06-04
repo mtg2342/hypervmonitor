@@ -349,6 +349,40 @@ function bindSensorInstall() {
                     lines.push('Sensors found: ' + (d.sensor_count != null ? d.sensor_count : (d.sensors || []).length));
                     if (d.error) lines.push('Top-level error: ' + d.error);
                     lines.push('');
+
+                    // Environment block — surfaces the cause of "Invalid namespace"
+                    // and other LHM-related failures.
+                    const env = d.env || {};
+                    const yn = (v) => v ? 'YES' : 'no';
+                    lines.push('── Environment ──');
+                    lines.push('LHM installed:        ' + yn(env.lhm_installed) +
+                        (env.lhm_install_path ? '  (' + env.lhm_install_path + ')' : ''));
+                    lines.push('LHM process running:  ' + yn(env.lhm_running));
+                    lines.push('LHM WMI namespace:    ' + yn(env.lhm_wmi_namespace));
+                    lines.push('.NET 8 Desktop:       ' + yn(env.dotnet_desktop_8));
+                    lines.push('');
+
+                    // Diagnose the common failure modes inline so the user doesn't
+                    // have to interpret each line themselves
+                    const causes = [];
+                    if (env.lhm_installed === false) {
+                        causes.push('• LHM isn\'t installed — click the Install button above.');
+                    } else if (env.dotnet_desktop_8 === false && env.lhm_running === false) {
+                        causes.push('• .NET 8 Desktop Runtime is missing AND LHM isn\'t running. ' +
+                                    'The Install button will install the runtime and start LHM.');
+                    } else if (env.lhm_running === false) {
+                        causes.push('• LHM is installed but its process isn\'t running. Click "Start LHM" above.');
+                    } else if (env.lhm_wmi_namespace === false) {
+                        causes.push('• LHM is running but its WMI provider plugin is OFF. ' +
+                                    'Click "Restart LHM" above (rewrites the WMI-enabled config) ' +
+                                    'or right-click the LHM tray icon → Options → tick WMI.');
+                    }
+                    if (causes.length) {
+                        lines.push('── Likely cause ──');
+                        for (const c of causes) lines.push(c);
+                        lines.push('');
+                    }
+
                     lines.push('── Per-source diagnostics ──');
                     const diag = d.diagnostics || {};
                     for (const key of ['acpi', 'smart', 'lhm', 'ohm']) {
