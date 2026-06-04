@@ -100,12 +100,17 @@ if (-not (Test-DotNetDesktop8Plus)) {
         # aka.ms link redirects to the latest .NET 8 Desktop Runtime build
         $dnUrl = 'https://aka.ms/dotnet/8.0/windowsdesktop-runtime-win-x64.exe'
         $dnExe = Join-Path $env:TEMP 'dotnet-desktop-runtime-installer.exe'
+        $dnLog = Join-Path $env:TEMP 'dotnet-desktop-runtime-installer.log'
         try {
             Log "Downloading $dnUrl ..."
             Invoke-WebRequest -Uri $dnUrl -OutFile $dnExe -UseBasicParsing -TimeoutSec 300
             $sz = (Get-Item $dnExe).Length
             Log ("Downloaded {0:N1} MB, running silent install ..." -f ($sz / 1MB))
-            $p = Start-Process -FilePath $dnExe -ArgumentList '/install', '/quiet', '/norestart' -Wait -PassThru
+            # /log tells the bootstrapper to write a verbose log we can inspect
+            # if the install fails — far more useful than just an exit code.
+            $p = Start-Process -FilePath $dnExe `
+                -ArgumentList '/install', '/quiet', '/norestart', '/log', $dnLog `
+                -Wait -PassThru
             Remove-Item $dnExe -Force -ErrorAction SilentlyContinue
             # Microsoft installer exit codes: 0 = success, 3010 = success+reboot
             if ($p.ExitCode -eq 0 -or $p.ExitCode -eq 3010) {
@@ -116,6 +121,17 @@ if (-not (Test-DotNetDesktop8Plus)) {
                 }
             } else {
                 Log ("ERROR: .NET installer exit code {0}" -f $p.ExitCode)
+                # Surface the bottom of the installer log so the user sees the
+                # real failure reason instead of just an opaque exit code.
+                if (Test-Path $dnLog) {
+                    Log "Last 25 lines of .NET installer log:"
+                    try {
+                        Get-Content -Path $dnLog -Tail 25 -ErrorAction Stop |
+                            ForEach-Object { Log ("  | {0}" -f $_) }
+                    } catch {
+                        Log ("  (couldn't read log: {0})" -f $_.Exception.Message)
+                    }
+                }
             }
         } catch {
             Log ("ERROR downloading/installing .NET: {0}" -f $_.Exception.Message)
@@ -258,15 +274,37 @@ try {
 
 # ── Step 6: start LHM now so its WMI provider is live ───────────────────────
 Log "Starting LibreHardwareMonitor ..."
+$lhmAlive = $false
 try {
     Get-Process -Name LibreHardwareMonitor -ErrorAction SilentlyContinue |
         Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 1
     Start-Process -FilePath $exe -ArgumentList '/MinTrayIcon' -WindowStyle Hidden
-    Start-Sleep -Seconds 3
-    Log "LHM is running."
+    # Wait long enough for the .NET runtime to load and (if it's going to)
+    # die on a missing-runtime error. 4 seconds is enough in practice.
+    Start-Sleep -Seconds 4
+
+    # Verify the process is still alive — this catches the silent-death case
+    # where .NET wasn't actually installed despite our checks above.
+    $proc = Get-Process -Name LibreHardwareMonitor -ErrorAction SilentlyContinue
+    if ($proc) {
+        $lhmAlive = $true
+        Log ("LHM is running (PID {0})." -f $proc.Id)
+    } else {
+        Log "ERROR: LHM exited immediately after launch."
+        Log "  This almost always means the .NET 8 Desktop Runtime is still missing."
+        Log "  To install manually, run as Administrator:"
+        Log "    `$exe = `"`$env:TEMP\dotnet8-desktop.exe`""
+        Log "    Invoke-WebRequest 'https://aka.ms/dotnet/8.0/windowsdesktop-runtime-win-x64.exe' -OutFile `$exe"
+        Log "    Start-Process `$exe -ArgumentList '/install','/quiet','/norestart' -Wait"
+        Log "  Then click 'Start LHM' in the dashboard."
+    }
 } catch {
     Log ("ERROR launching LHM: {0}" -f $_.Exception.Message)
+}
+
+if (-not $lhmAlive) {
+    Log "=== Done with errors. ==="
     exit 1
 }
 
