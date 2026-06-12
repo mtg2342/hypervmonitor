@@ -349,6 +349,21 @@ def windows_backup_refresh():
 
 LHM_INSTALL_PATH = r"C:\Program Files\LibreHardwareMonitor"
 LHM_EXE_PATH     = os.path.join(LHM_INSTALL_PATH, "LibreHardwareMonitor.exe")
+LHM_LIB_DLL_PATH = os.path.join(LHM_INSTALL_PATH, "LibreHardwareMonitorLib.dll")
+
+
+def _lhm_wrong_build():
+    """True when the installed LHM is the .NET 8/10 build (has a
+    *.runtimeconfig.json). That build needs a runtime Windows doesn't ship
+    and its DLL can't be loaded by Windows PowerShell — the installer
+    replaces it with the net472 build."""
+    try:
+        for name in os.listdir(LHM_INSTALL_PATH):
+            if name.endswith(".runtimeconfig.json"):
+                return True
+    except Exception:
+        pass
+    return False
 
 
 @app.route("/api/sensors/status")
@@ -395,6 +410,8 @@ def sensors_status():
             "lhm_installed":     os.path.exists(LHM_EXE_PATH),
             "lhm_install_path":  LHM_INSTALL_PATH if os.path.exists(LHM_EXE_PATH) else None,
             "lhm_running":       _is_lhm_running(),
+            "lhm_lib_dll":       os.path.exists(LHM_LIB_DLL_PATH),
+            "lhm_wrong_build":   _lhm_wrong_build(),
             "dotnet_desktop_8":  _dotnet_desktop_8_installed(),
             "last_updated":      row["updated_ts"] if row else None,
         })
@@ -464,6 +481,8 @@ def sensors_debug():
             "lhm_installed":    os.path.exists(LHM_EXE_PATH),
             "lhm_install_path": LHM_INSTALL_PATH if os.path.exists(LHM_EXE_PATH) else None,
             "lhm_running":      _is_lhm_running(),
+            "lhm_lib_dll":      os.path.exists(LHM_LIB_DLL_PATH),
+            "lhm_wrong_build":  _lhm_wrong_build(),
             "dotnet_desktop_8": _dotnet_desktop_8_installed(),
         }
         # Probe whether the LHM WMI namespace itself exists (separately from

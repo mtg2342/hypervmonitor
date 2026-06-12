@@ -335,10 +335,11 @@ class MetricCollector:
 $ErrorActionPreference = 'Continue'
 $sensors = @()
 $diag = @{
-    acpi  = @{ tried = $false; count = 0; error = $null }
-    smart = @{ tried = $false; count = 0; error = $null; disks = 0 }
-    lhm   = @{ tried = $false; count = 0; error = $null }
-    ohm   = @{ tried = $false; count = 0; error = $null }
+    acpi   = @{ tried = $false; count = 0; error = $null }
+    smart  = @{ tried = $false; count = 0; error = $null; disks = 0 }
+    lhm    = @{ tried = $false; count = 0; error = $null }
+    ohm    = @{ tried = $false; count = 0; error = $null }
+    lhmdll = @{ tried = $false; count = 0; error = $null; hw = 0 }
 }
 
 function Test-Plausible($v) {
@@ -462,10 +463,72 @@ try {
     $diag.ohm.error = $_.Exception.Message
 }
 
+# ── 5. LibreHardwareMonitorLib.dll direct (no GUI / WMI provider needed) ────
+# The net472 build of LibreHardwareMonitorLib loads straight into Windows
+# PowerShell. This is the workhorse for CPU/GPU/motherboard temps: it talks
+# to the hardware itself (ring0 driver, NVML, SuperIO), so it works even when
+# the LHM tray app isn't running or its WMI plugin is off. Skipped when a
+# cheaper source above already produced a CPU temperature.
+$haveCpu = $false
+foreach ($e in $sensors) { if ($e.t -eq 'cpu') { $haveCpu = $true; break } }
+if (-not $haveCpu) {
+    $diag.lhmdll.tried = $true
+    $lhmDll = 'C:\Program Files\LibreHardwareMonitor\LibreHardwareMonitorLib.dll'
+    if (-not (Test-Path $lhmDll)) {
+        $diag.lhmdll.error = 'LibreHardwareMonitorLib.dll not found - use Install in Settings > Sensor Sources'
+    } else {
+        $comp = $null
+        try {
+            $asm = [System.Reflection.Assembly]::LoadFrom($lhmDll)
+            $compType = $asm.GetType('LibreHardwareMonitor.Hardware.Computer')
+            $comp = [System.Activator]::CreateInstance($compType)
+            $comp.IsCpuEnabled         = $true
+            $comp.IsGpuEnabled         = $true
+            $comp.IsMotherboardEnabled = $true
+            # Storage intentionally OFF - SMART above already covers disks,
+            # and skipping it makes Open() noticeably faster.
+            $comp.Open()
+            $hwList = @($comp.Hardware)
+            $diag.lhmdll.hw = $hwList.Count
+            foreach ($hw in $hwList) {
+                try { $hw.Update() } catch {}
+                $units = @($hw) + @($hw.SubHardware)
+                foreach ($u in $units) {
+                    if ($u -ne $hw) { try { $u.Update() } catch {} }
+                    foreach ($s in $u.Sensors) {
+                        try {
+                            if ("$($s.SensorType)" -ne 'Temperature') { continue }
+                            if (-not (Test-Plausible $s.Value)) { continue }
+                            $htype = "$($hw.HardwareType)"
+                            $type = 'motherboard'
+                            if     ($htype -match '^(?i)cpu')     { $type = 'cpu' }
+                            elseif ($htype -match '^(?i)gpu')     { $type = 'gpu' }
+                            elseif ($htype -match '^(?i)storage') { $type = 'disk' }
+                            $sname = "$($s.Name)"
+                            $already = $false
+                            foreach ($e in $sensors) {
+                                if ($e.t -eq $type -and $e.n -eq $sname) { $already = $true; break }
+                            }
+                            if (-not $already) {
+                                $sensors += @{ t = $type; n = $sname; c = [Math]::Round([double]$s.Value, 1); s = 'LHM' }
+                                $diag.lhmdll.count++
+                            }
+                        } catch {}
+                    }
+                }
+            }
+        } catch {
+            $diag.lhmdll.error = $_.Exception.Message
+        } finally {
+            if ($comp) { try { $comp.Close() } catch {} }
+        }
+    }
+}
+
 @{ sensors = $sensors; diagnostics = $diag } | ConvertTo-Json -Compress -Depth 4
 """
 
-    def _run_temp_script(self, timeout=25):
+    def _run_temp_script(self, timeout=50):
         """Run the temperature scan via -EncodedCommand for safety, return the
         parsed dict OR (None, error_message) for diagnostic purposes."""
         try:

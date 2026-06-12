@@ -242,50 +242,45 @@ function renderSensorStatus(d) {
     const hasMb  = (counts.motherboard || 0) > 0;
     const hasCpuLhm = (sources.cpu || []).some(s => /LHM|OHM/.test(s));
 
-    // Dotnet-missing case is special — LHM is installed but won't run.
-    const needsDotNet = d.lhm_installed && !d.dotnet_desktop_8 && !d.lhm_running;
+    // Wrong-framework install: the .NET 8/10 build of LHM needs a runtime
+    // Windows doesn't ship, and its sensor DLL can't be loaded by the
+    // collector. The installer swaps it for the net472 build.
+    const wrongBuild = d.lhm_installed && (d.lhm_wrong_build || !d.lhm_lib_dll);
 
-    if (needsDotNet) {
-        title.textContent = '.NET 8 Desktop Runtime missing';
+    if (wrongBuild) {
+        title.textContent = 'Update LibreHardwareMonitor build';
         detail.innerHTML =
-            'LibreHardwareMonitor is installed at <code>' +
-            escapeHtml(d.lhm_install_path || '') + '</code> but won\'t launch ' +
-            'because the host doesn\'t have the .NET 8 Desktop Runtime. ' +
-            'Clicking below will install the runtime (~60 MB download from ' +
-            'Microsoft\'s official source) and then start LHM. ' +
-            'This is usually a one-time setup.';
-        btn.textContent = 'Install .NET + Start LHM';
+            'The copy at <code>' + escapeHtml(d.lhm_install_path || '') +
+            '</code> is the .NET 8/10 build, which the dashboard can\'t read ' +
+            'sensors from. Click below to replace it with the standard build ' +
+            'that runs on Windows\' built-in .NET Framework — no extra ' +
+            'runtime downloads needed.';
+        btn.textContent = 'Reinstall Sensor Support';
         row.style.display = 'flex';
     } else if (d.lhm_installed && (hasGpu || hasMb || hasCpuLhm)) {
         // Installed and producing data — done
         row.style.display = 'none';
-    } else if (d.lhm_installed && d.lhm_running) {
-        // Installed and running but no LHM-sourced sensors yet — WMI probably off
-        title.textContent = 'Re-run LibreHardwareMonitor';
-        detail.innerHTML = 'LHM is installed and running but no GPU/motherboard ' +
-            'sensors are reporting yet. Click below to restart it (re-applies ' +
-            'the WMI-enabled config). If you still see nothing after a minute, ' +
-            'right-click the LHM tray icon and tick <em>Options → WMI</em>.';
-        btn.textContent = 'Restart LHM';
-        row.style.display = 'flex';
     } else if (d.lhm_installed) {
-        // Installed but not running — just relaunch it
-        title.textContent = 'Start LibreHardwareMonitor';
-        detail.innerHTML = 'LHM is installed at <code>' +
-            escapeHtml(d.lhm_install_path || '') + '</code> but isn\'t running. ' +
-            'Click below to start it.';
-        btn.textContent = 'Start LHM';
+        // Installed with the right build but no CPU/GPU/board temps yet.
+        // The collector reads the sensor DLL directly on each poll, so
+        // re-running setup + waiting one poll is the universal fix.
+        title.textContent = 'Re-run sensor setup';
+        detail.innerHTML = 'LibreHardwareMonitor is installed and the dashboard ' +
+            'reads its sensor library directly (no tray app needed). If ' +
+            'temperatures haven\'t appeared yet, click below to re-run setup, ' +
+            'then give it ~30 seconds for the next poll.';
+        btn.textContent = 'Re-run Sensor Setup';
         row.style.display = 'flex';
     } else {
         // Not installed — full install path
         title.textContent = 'Install LibreHardwareMonitor';
-        detail.innerHTML = 'Downloads the latest release from GitHub, extracts ' +
-            'it to <code>C:\\Program Files\\LibreHardwareMonitor</code>, ' +
-            (d.dotnet_desktop_8
-                ? ''
-                : 'installs the required .NET 8 Desktop Runtime if missing, ') +
-            'registers a logon scheduled task, and starts it now so the WMI ' +
-            'namespace becomes available immediately.';
+        detail.innerHTML = 'Downloads the standard LibreHardwareMonitor release ' +
+            'from GitHub (runs on Windows\' built-in .NET Framework — nothing ' +
+            'else to install), extracts it to ' +
+            '<code>C:\\Program Files\\LibreHardwareMonitor</code>, registers a ' +
+            'logon scheduled task, and verifies the dashboard can read its ' +
+            'sensor library. CPU/GPU/motherboard temperatures appear within ' +
+            '~30 seconds of finishing.';
         btn.textContent = 'Install';
         row.style.display = 'flex';
     }
@@ -353,29 +348,37 @@ function bindSensorInstall() {
                     // Environment block — surfaces the cause of "Invalid namespace"
                     // and other LHM-related failures.
                     const env = d.env || {};
+                    const diag = d.diagnostics || {};
                     const yn = (v) => v ? 'YES' : 'no';
                     lines.push('── Environment ──');
                     lines.push('LHM installed:        ' + yn(env.lhm_installed) +
                         (env.lhm_install_path ? '  (' + env.lhm_install_path + ')' : ''));
-                    lines.push('LHM process running:  ' + yn(env.lhm_running));
-                    lines.push('LHM WMI namespace:    ' + yn(env.lhm_wmi_namespace));
-                    lines.push('.NET 8 Desktop:       ' + yn(env.dotnet_desktop_8));
+                    lines.push('LHM sensor DLL:       ' + yn(env.lhm_lib_dll) +
+                        (env.lhm_wrong_build ? '  (.NET 8/10 build — needs reinstall)' : ''));
+                    lines.push('LHM process running:  ' + yn(env.lhm_running) + '  (optional — not needed for temps)');
+                    lines.push('LHM WMI namespace:    ' + yn(env.lhm_wmi_namespace) + '  (optional — not needed for temps)');
                     lines.push('');
 
                     // Diagnose the common failure modes inline so the user doesn't
-                    // have to interpret each line themselves
+                    // have to interpret each line themselves. Temperatures come
+                    // from loading the sensor DLL directly, so that chain is what
+                    // we diagnose — the tray app / WMI provider are optional.
+                    const dll = diag.lhmdll || {};
                     const causes = [];
                     if (env.lhm_installed === false) {
                         causes.push('• LHM isn\'t installed — click the Install button above.');
-                    } else if (env.dotnet_desktop_8 === false && env.lhm_running === false) {
-                        causes.push('• .NET 8 Desktop Runtime is missing AND LHM isn\'t running. ' +
-                                    'The Install button will install the runtime and start LHM.');
-                    } else if (env.lhm_running === false) {
-                        causes.push('• LHM is installed but its process isn\'t running. Click "Start LHM" above.');
-                    } else if (env.lhm_wmi_namespace === false) {
-                        causes.push('• LHM is running but its WMI provider plugin is OFF. ' +
-                                    'Click "Restart LHM" above (rewrites the WMI-enabled config) ' +
-                                    'or right-click the LHM tray icon → Options → tick WMI.');
+                    } else if (env.lhm_wrong_build === true || env.lhm_lib_dll === false) {
+                        causes.push('• The installed LHM is the .NET 8/10 build, which the ' +
+                                    'dashboard can\'t read. Click "Reinstall Sensor Support" ' +
+                                    'above to swap in the standard build.');
+                    } else if (dll.error) {
+                        causes.push('• Loading the sensor DLL failed: ' + dll.error);
+                        causes.push('  Re-running setup via the button above usually fixes this.');
+                    } else if (dll.tried && (dll.hw || 0) > 0 && (dll.count || 0) === 0) {
+                        causes.push('• The sensor DLL loaded and saw ' + dll.hw + ' hardware item(s) ' +
+                                    'but returned no readable temperatures. This usually means the ' +
+                                    'dashboard service isn\'t running as Administrator (the CPU ' +
+                                    'sensor driver needs it) — restart it via start.bat as admin.');
                     }
                     if (causes.length) {
                         lines.push('── Likely cause ──');
@@ -384,18 +387,23 @@ function bindSensorInstall() {
                     }
 
                     lines.push('── Per-source diagnostics ──');
-                    const diag = d.diagnostics || {};
-                    for (const key of ['acpi', 'smart', 'lhm', 'ohm']) {
+                    const sourceLabels = { acpi: 'ACPI', smart: 'SMART', lhm: 'LHM-WMI', ohm: 'OHM', lhmdll: 'LHM-DLL' };
+                    for (const key of ['acpi', 'smart', 'lhm', 'ohm', 'lhmdll']) {
                         const e = diag[key] || {};
-                        let line = key.toUpperCase().padEnd(6) + ' ';
+                        let line = (sourceLabels[key] || key.toUpperCase()).padEnd(8) + ' ';
                         if (!e.tried) {
-                            line += 'not tried';
+                            line += (key === 'lhmdll')
+                                ? 'not needed (a cheaper source already found CPU temps)'
+                                : 'not tried';
                         } else if (e.error) {
                             line += 'ERROR — ' + e.error;
                         } else {
                             line += (e.count || 0) + ' sensor(s)';
                             if (key === 'smart' && e.disks != null) {
                                 line += ' (' + e.disks + ' disk' + (e.disks === 1 ? '' : 's') + ' scanned)';
+                            }
+                            if (key === 'lhmdll' && e.hw != null) {
+                                line += ' (' + e.hw + ' hardware item' + (e.hw === 1 ? '' : 's') + ' probed)';
                             }
                         }
                         lines.push(line);
@@ -415,7 +423,8 @@ function bindSensorInstall() {
                         lines.push('No sensors returned by any source.');
                         lines.push('');
                         lines.push('Common causes:');
-                        lines.push('  • LHM/OHM not running (install via button above)');
+                        lines.push('  • LHM not installed (use the Install button above)');
+                        lines.push('  • Dashboard service not running as Administrator');
                         lines.push('  • Storage is behind a RAID controller that hides SMART');
                         lines.push('  • Enterprise board with no ACPI thermal zones exposed');
                     }
