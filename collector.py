@@ -114,10 +114,20 @@ class MetricCollector:
                 self._collect_vhd(conn, ts)
             if self._poll_count == 1 or self._poll_count % UPDATES_POLL_MULTIPLE == 0:
                 self._collect_pending_updates(conn, ts)
-            if self._poll_count % ROLLUP_POLL_MULTIPLE == 0:
-                rollup_aggregates(conn)
+            # Rollup also on poll 1 so a restart catches up any hours/days
+            # accumulated while the app was down — otherwise the 7D/30D/4M
+            # ranges lag a full hour after every update/reboot. Shielded so
+            # a rollup error can never abort the cycle (and its commit).
+            if self._poll_count == 1 or self._poll_count % ROLLUP_POLL_MULTIPLE == 0:
+                try:
+                    rollup_aggregates(conn)
+                except Exception:
+                    logger.exception("Rollup failed")
             if self._poll_count % PURGE_CHECK_MULTIPLE == 0:
-                purge_old_data(conn)
+                try:
+                    purge_old_data(conn)
+                except Exception:
+                    logger.exception("Purge failed")
             conn.commit()
         finally:
             conn.close()

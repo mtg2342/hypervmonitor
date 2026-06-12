@@ -4,6 +4,12 @@ function _cssVar(name) {
 
 let CHART_COLORS = [];
 let CHART_DEFAULTS = {};
+// Theme-aware colours for datasets that aren't in the VM palette. The host
+// line was previously hardcoded '#ffffff', which is invisible on the light
+// theme's white card background.
+let CHART_HOST_LINE   = '#ffffff';
+let CHART_HOST_LINE_2 = '#888888';
+let CHART_FREE_BG     = '#2a2e3f';
 
 function refreshChartDefaults() {
     const text2 = _cssVar('--text-2') || '#9197ac';
@@ -19,6 +25,11 @@ function refreshChartDefaults() {
     const purple = _cssVar('--purple') || '#a78bfa';
 
     CHART_COLORS = [accent, green, amber, red, purple, '#56cfe1', '#ec98c5', '#fcd34d'];
+
+    const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+    CHART_HOST_LINE   = isLight ? '#475569' : '#ffffff';
+    CHART_HOST_LINE_2 = isLight ? '#94a3b8' : '#888888';
+    CHART_FREE_BG     = isLight ? '#e2e8f0' : '#2a2e3f';
 
     CHART_DEFAULTS = {
         animation: false,
@@ -71,6 +82,10 @@ function refreshChartDefaults() {
 refreshChartDefaults();
 
 function hexToRgba(hex, alpha) {
+    // Colours sourced from CSS vars may not be hex — pass those through
+    // untouched rather than producing an invalid colour string (Chart.js
+    // renders invalid colours as opaque black).
+    if (!hex || hex[0] !== '#' || hex.length < 7) return hex;
     const h = hex.replace('#', '');
     const r = parseInt(h.substring(0, 2), 16);
     const g = parseInt(h.substring(2, 4), 16);
@@ -235,7 +250,7 @@ function buildDetailChart(tab, historyData, vmHistoryData, rangeKey) {
             datasets.push({
                 label: 'Host',
                 data: historyData.map(r => r.cpu_pct),
-                borderColor: '#ffffff',
+                borderColor: CHART_HOST_LINE,
                 borderWidth: 2,
                 borderDash: [4, 4],
                 pointRadius: 0,
@@ -278,7 +293,7 @@ function buildDetailChart(tab, historyData, vmHistoryData, rangeKey) {
                 label: vm + ' (assigned)',
                 data: rows.map(r => bytesToGB(r.mem_assigned)),
                 borderColor: CHART_COLORS[ci % CHART_COLORS.length],
-                backgroundColor: CHART_COLORS[ci % CHART_COLORS.length].replace(')', ', 0.15)').replace('#', 'rgba('),
+                backgroundColor: hexToRgba(CHART_COLORS[ci % CHART_COLORS.length], 0.15),
                 borderWidth: 1.5,
                 pointRadius: 0,
                 tension: 0.3,
@@ -350,7 +365,7 @@ function buildDetailChart(tab, historyData, vmHistoryData, rangeKey) {
             datasets.push({
                 label: 'Host Read',
                 data: historyData.map(r => bytesToMBps(r.disk_read_bps)),
-                borderColor: '#ffffff',
+                borderColor: CHART_HOST_LINE,
                 borderWidth: 1.5,
                 borderDash: [4, 4],
                 pointRadius: 0, tension: 0.3, fill: false,
@@ -358,7 +373,7 @@ function buildDetailChart(tab, historyData, vmHistoryData, rangeKey) {
             datasets.push({
                 label: 'Host Write',
                 data: historyData.map(r => bytesToMBps(r.disk_write_bps)),
-                borderColor: '#888888',
+                borderColor: CHART_HOST_LINE_2,
                 borderWidth: 1.5,
                 borderDash: [4, 4],
                 pointRadius: 0, tension: 0.3, fill: false,
@@ -432,7 +447,7 @@ function buildStorageChart(ctx) {
                             labels,
                             datasets: [
                                 { label: 'Used', data: usedData, backgroundColor: '#4c9aff' },
-                                { label: 'Free', data: freeData, backgroundColor: '#2a2e3f' },
+                                { label: 'Free', data: freeData, backgroundColor: CHART_FREE_BG },
                             ],
                         },
                         options: {
